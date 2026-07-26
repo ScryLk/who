@@ -1,0 +1,10 @@
+{
+  "extends": "@who/config-typescript/tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "moduleResolution": "node",
+    "module": "commonjs"
+  },
+  "include": ["src/**/*"]
+}

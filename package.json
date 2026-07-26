@@ -1,0 +1,16 @@
+{
+  "name": "who-monorepo",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "check-types": "turbo check-types",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0",
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "pnpm@10.30.3"
+}
