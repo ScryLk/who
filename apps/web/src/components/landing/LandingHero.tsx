@@ -40,7 +40,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
         Adivinhe quem escolheu a música, aposte suas fichas e descubra quem tem o melhor gosto musical da galera!
       </p>
 
-      {/* Main Action Buttons Matching Mockup Image 3 */}
+      {/* Main Action Buttons */}
       <div className="w-full max-w-md flex flex-col gap-5">
         <button
           onClick={onCreateRoom}

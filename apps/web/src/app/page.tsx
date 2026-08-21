@@ -6,12 +6,6 @@ import { getSocket } from '@/lib/socket';
 
 import { Header } from '@/components/landing/Header';
 import { LandingHero } from '@/components/landing/LandingHero';
-import { StatsSection } from '@/components/landing/StatsSection';
-import { FeaturesSection } from '@/components/landing/FeaturesSection';
-import { GameModesSection } from '@/components/landing/GameModesSection';
-import { HallOfFameSection } from '@/components/landing/HallOfFameSection';
-import { ConnectSection } from '@/components/landing/ConnectSection';
-import { QuickPlayBanner } from '@/components/landing/QuickPlayBanner';
 import { HowToPlayModal } from '@/components/landing/HowToPlayModal';
 
 import { RoomLobby } from '@/components/game/RoomLobby';
@@ -186,8 +180,7 @@ export default function Home() {
     const myPlayer = room.players.find((p) => p.id === myPlayerId);
 
     return (
-      <main className="min-h-screen pb-24 bg-gradient-main">
-        <Header onOpenHowToPlay={() => setIsHowToPlayOpen(true)} />
+      <main className="h-screen max-h-screen overflow-hidden bg-gradient-main flex flex-col justify-between relative">
 
         {room.phase === 'LOBBY' && (
           <RoomLobby
@@ -195,6 +188,7 @@ export default function Home() {
             myPlayerId={myPlayerId}
             onAddBot={handleAddBot}
             onStartGame={handleStartGame}
+            onSubmitTrack={handleSubmitTrack}
           />
         )}
 
@@ -229,11 +223,13 @@ export default function Home() {
           <GameOver room={room} onPlayAgain={handleStartGame} />
         )}
 
-        <LiveChat
-          roomCode={room.code}
-          myNickname={myPlayer?.nickname || 'Jogador'}
-          chatMessages={room.chatMessages || []}
-        />
+        {room.phase !== 'LOBBY' && (
+          <LiveChat
+            roomCode={room.code}
+            myNickname={myPlayer?.nickname || 'Jogador'}
+            chatMessages={room.chatMessages || []}
+          />
+        )}
 
         <HowToPlayModal
           isOpen={isHowToPlayOpen}
@@ -243,29 +239,18 @@ export default function Home() {
     );
   }
 
-  // Render Landing Page if not in a room
+  // Render Game Portal Home if not in a room
   return (
-    <main className="min-h-screen bg-gradient-main text-white relative">
+    <main className="min-h-screen bg-gradient-main text-white flex flex-col justify-between relative overflow-hidden">
       <Header onOpenHowToPlay={() => setIsHowToPlayOpen(true)} />
 
-      <LandingHero
-        onCreateRoom={() => setIsCreateModalOpen(true)}
-        onJoinRoom={() => setIsJoinModalOpen(true)}
-        onOpenHowToPlay={() => setIsHowToPlayOpen(true)}
-      />
-
-      <StatsSection />
-      <FeaturesSection />
-      <GameModesSection />
-      <HallOfFameSection />
-      <ConnectSection />
-      <QuickPlayBanner onQuickPlay={() => setIsCreateModalOpen(true)} />
-
-      {/* Footer matching Image 5 */}
-      <footer className="py-10 px-4 border-t border-white/10 text-center text-xs text-blue-200/70 space-y-4">
-        <p className="font-semibold">Feito com ❤️ por Who? Team</p>
-        <p>© 2026 Who? - Todos os direitos reservados</p>
-      </footer>
+      <div className="flex-1 flex items-center justify-center my-auto">
+        <LandingHero
+          onCreateRoom={() => setIsCreateModalOpen(true)}
+          onJoinRoom={() => setIsJoinModalOpen(true)}
+          onOpenHowToPlay={() => setIsHowToPlayOpen(true)}
+        />
+      </div>
 
       {/* Create Room Modal */}
       {isCreateModalOpen && (

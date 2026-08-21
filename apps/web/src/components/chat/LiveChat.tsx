@@ -89,16 +89,16 @@ export const LiveChat: React.FC<LiveChatProps> = ({
         ))}
       </div>
 
-      {/* Floating Chat Trigger Button */}
+      {/* Floating Chat Trigger Button (Icon Only) */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 z-40 p-4 rounded-2xl bg-gradient-button-purple text-white shadow-glow-purple hover:scale-110 transition flex items-center gap-2 font-bold"
+          className="fixed bottom-6 right-6 z-40 p-3.5 rounded-full bg-gradient-button-purple text-white shadow-glow-purple hover:scale-110 transition flex items-center justify-center relative border border-purple-300"
+          title="Chat ao Vivo"
         >
           <MessageSquare className="w-6 h-6" />
-          <span className="hidden sm:inline">Chat ao Vivo</span>
           {chatMessages.length > 0 && (
-            <span className="w-5 h-5 rounded-full bg-yellow-400 text-slate-950 text-xs font-black flex items-center justify-center">
+            <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-yellow-400 text-slate-950 text-xs font-black flex items-center justify-center shadow-md">
               {chatMessages.length}
             </span>
           )}
