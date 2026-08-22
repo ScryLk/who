@@ -2,12 +2,18 @@ export type GameMode = 'classic' | 'turbo' | 'epic';
 
 export type GamePhase =
   | 'LOBBY'
+  | 'COUNTDOWN'
   | 'MUSIC_SELECTION'
   | 'BETTING'
   | 'REVEAL'
   | 'GAME_OVER';
 
-export type SecondaryPredictionKind = 'SPECIFIC_PLAYERS' | 'PLAYER_COUNT' | 'NONE';
+export type SecondaryPredictionKind =
+  | 'SPECIFIC_PLAYERS'
+  | 'PLAYER_COUNT'
+  | 'MORE_THAN'
+  | 'FEWER_THAN'
+  | 'NONE';
 
 export interface Track {
   id: string;
@@ -17,6 +23,9 @@ export interface Track {
   audioUrl: string;
   genre?: string;
   submittedByPlayerId: string;
+  isVideo?: boolean;
+  youtubeId?: string;
+  startTimeSeconds?: number;
 }
 
 export interface Player {
@@ -98,6 +107,9 @@ export interface RoomState {
   totalRounds: number;
   roundDurationSeconds: number;
   timeRemainingSeconds: number;
+  turnIndex?: number;
+  currentTurnPlayerId?: string;
+  turnTimeRemainingSeconds?: number;
   players: Player[];
   submittedTracks: Track[];
   currentTrack?: Track;

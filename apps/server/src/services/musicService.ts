@@ -5,6 +5,33 @@ export interface TrackSearchResult {
   albumArt: string;
   audioUrl: string;
   genre?: string;
+  isVideo?: boolean;
+  youtubeId?: string;
+  startTimeSeconds?: number;
+}
+
+export function extractYouTubeInfo(url: string): { youtubeId: string | null; startTimeSeconds: number } {
+  if (!url) return { youtubeId: null, startTimeSeconds: 0 };
+
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  const youtubeId = match && match[2].length === 11 ? match[2] : null;
+
+  let startTimeSeconds = 0;
+  const timeMatch = url.match(/[?&]t=([0-9]+s?|[0-9]+m[0-9]+s?)/);
+  if (timeMatch) {
+    const rawTime = timeMatch[1];
+    if (rawTime.includes('m')) {
+      const parts = rawTime.split('m');
+      const mins = parseInt(parts[0], 10) || 0;
+      const secs = parseInt(parts[1].replace('s', ''), 10) || 0;
+      startTimeSeconds = mins * 60 + secs;
+    } else {
+      startTimeSeconds = parseInt(rawTime.replace('s', ''), 10) || 0;
+    }
+  }
+
+  return { youtubeId, startTimeSeconds };
 }
 
 const FEATURED_CATALOG: TrackSearchResult[] = [
@@ -53,6 +80,24 @@ const FEATURED_CATALOG: TrackSearchResult[] = [
 export async function searchTracks(query: string): Promise<TrackSearchResult[]> {
   if (!query || query.trim().length === 0) {
     return FEATURED_CATALOG;
+  }
+
+  // Check if query is YouTube URL
+  const ytInfo = extractYouTubeInfo(query);
+  if (ytInfo.youtubeId) {
+    return [
+      {
+        id: `yt-${ytInfo.youtubeId}`,
+        title: `Vídeo do YouTube (${ytInfo.youtubeId})`,
+        artist: 'YouTube Video',
+        albumArt: `https://img.youtube.com/vi/${ytInfo.youtubeId}/hqdefault.jpg`,
+        audioUrl: `https://www.youtube.com/embed/${ytInfo.youtubeId}`,
+        genre: 'Vídeo',
+        isVideo: true,
+        youtubeId: ytInfo.youtubeId,
+        startTimeSeconds: ytInfo.startTimeSeconds,
+      },
+    ];
   }
 
   try {

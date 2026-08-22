@@ -3,6 +3,43 @@ import { roomStore } from '../services/roomStore';
 import { searchTracks } from '../services/musicService';
 
 export function setupSocketHandlers(io: Server) {
+  // 1-second Room Timer Interval for COUNTDOWN and MUSIC_SELECTION turns
+  setInterval(() => {
+    const rooms = roomStore.getAllRooms();
+    rooms.forEach((room) => {
+      if (room.phase === 'COUNTDOWN') {
+        room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 5) - 1;
+        if (room.timeRemainingSeconds <= 0) {
+          roomStore.startTurnSequence(room.code);
+        }
+        io.to(room.code).emit('room_updated', room);
+      } else if (room.phase === 'MUSIC_SELECTION') {
+        room.turnTimeRemainingSeconds = (room.turnTimeRemainingSeconds ?? 50) - 1;
+        if (room.turnTimeRemainingSeconds <= 0) {
+          roomStore.advanceTurn(room.code);
+        }
+        io.to(room.code).emit('room_updated', room);
+      } else if (room.phase === 'BETTING') {
+        room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 30) - 1;
+        if (room.timeRemainingSeconds <= 0) {
+          const resRoom = roomStore.resolveRound(room.code);
+          if (resRoom && resRoom.lastRoundResult) {
+            io.to(room.code).emit('round_resolved', { room: resRoom, result: resRoom.lastRoundResult });
+          }
+        }
+        io.to(room.code).emit('room_updated', room);
+      } else if (room.phase === 'REVEAL') {
+        room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 10) - 1;
+        if (room.timeRemainingSeconds <= 0) {
+          const nextRoom = roomStore.nextRound(room.code);
+          io.to(room.code).emit('room_updated', nextRoom);
+        } else {
+          io.to(room.code).emit('room_updated', room);
+        }
+      }
+    });
+  }, 1000);
+
   io.on('connection', (socket: Socket) => {
     console.log(`[Socket Connected] ID: ${socket.id}`);
 
@@ -46,6 +83,17 @@ export function setupSocketHandlers(io: Server) {
         io.to(result.room.code).emit('room_updated', result.room);
       } catch (err: any) {
         callback({ success: false, error: err.message });
+      }
+    });
+
+    // Set Player Ready
+    socket.on('set_ready', (data: { roomCode: string; isReady: boolean }, callback) => {
+      const room = roomStore.setPlayerReady(data.roomCode, socket.id, data.isReady);
+      if (room) {
+        if (typeof callback === 'function') callback({ success: true, room });
+        io.to(room.code).emit('room_updated', room);
+      } else {
+        if (typeof callback === 'function') callback({ success: false, error: 'Erro ao atualizar prontidão.' });
       }
     });
 
@@ -179,19 +227,36 @@ export function setupSocketHandlers(io: Server) {
 
     // Send Live Chat Message
     socket.on('send_chat', (data: { roomCode: string; senderName: string; text: string }) => {
-      const msg = roomStore.addChatMessage(data.roomCode, socket.id, data.senderName, data.text);
-      if (msg) {
-        io.to(data.roomCode).emit('chat_received', msg);
+      const room = roomStore.getRoom(data.roomCode);
+      if (room) {
+        const msg = roomStore.addChatMessage(room.code, socket.id, data.senderName, data.text);
+        if (msg) {
+          io.to(room.code).emit('chat_received', msg);
+          io.to(room.code).emit('room_updated', room);
+        }
       }
     });
 
     // Broadcast Emoji Reaction
     socket.on('send_reaction', (data: { roomCode: string; emoji: string; senderName: string }) => {
-      io.to(data.roomCode).emit('reaction_received', {
-        id: `reaction-${Date.now()}`,
-        emoji: data.emoji,
-        senderName: data.senderName,
-      });
+      const room = roomStore.getRoom(data.roomCode);
+      if (room) {
+        const reactionMsg = roomStore.addChatMessage(
+          room.code,
+          socket.id,
+          data.senderName,
+          `reagiu ${data.emoji}`
+        );
+        if (reactionMsg) {
+          io.to(room.code).emit('chat_received', reactionMsg);
+          io.to(room.code).emit('room_updated', room);
+        }
+        io.to(room.code).emit('reaction_received', {
+          id: `reaction-${Date.now()}`,
+          emoji: data.emoji,
+          senderName: data.senderName,
+        });
+      }
     });
 
     socket.on('disconnect', () => {

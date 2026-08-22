@@ -182,39 +182,20 @@ export default function Home() {
     return (
       <main className="h-screen max-h-screen overflow-hidden bg-gradient-main flex flex-col justify-between relative">
 
-        {room.phase === 'LOBBY' && (
+        {(room.phase === 'LOBBY' ||
+          room.phase === 'COUNTDOWN' ||
+          room.phase === 'MUSIC_SELECTION' ||
+          room.phase === 'BETTING' ||
+          room.phase === 'REVEAL') && (
           <RoomLobby
             room={room}
             myPlayerId={myPlayerId}
             onAddBot={handleAddBot}
             onStartGame={handleStartGame}
             onSubmitTrack={handleSubmitTrack}
-          />
-        )}
-
-        {room.phase === 'MUSIC_SELECTION' && (
-          <TrackSelector
-            roomCode={room.code}
-            onSubmitTrack={handleSubmitTrack}
-            alreadySubmitted={alreadySubmittedTrack}
-          />
-        )}
-
-        {room.phase === 'BETTING' && (
-          <BettingPhase
-            room={room}
-            myPlayerId={myPlayerId}
             onPlaceOwnerBet={handlePlaceOwnerBet}
             onPlaceGuesserBet={handlePlaceGuesserBet}
             onResolveRound={handleResolveRound}
-          />
-        )}
-
-        {room.phase === 'REVEAL' && (
-          <RevealPhase
-            room={room}
-            myPlayerId={myPlayerId}
-            result={room.lastRoundResult}
             onNextRound={handleNextRound}
           />
         )}
@@ -223,13 +204,7 @@ export default function Home() {
           <GameOver room={room} onPlayAgain={handleStartGame} />
         )}
 
-        {room.phase !== 'LOBBY' && (
-          <LiveChat
-            roomCode={room.code}
-            myNickname={myPlayer?.nickname || 'Jogador'}
-            chatMessages={room.chatMessages || []}
-          />
-        )}
+
 
         <HowToPlayModal
           isOpen={isHowToPlayOpen}

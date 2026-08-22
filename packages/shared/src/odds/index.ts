@@ -72,6 +72,22 @@ export function calculateRoundResolution(
       };
     }
 
+    if (kind === 'MORE_THAN') {
+      const exp = expectedCount ?? 2;
+      return {
+        success: correctGuessersCount > exp,
+        multiplier: 2.5,
+      };
+    }
+
+    if (kind === 'FEWER_THAN') {
+      const exp = expectedCount ?? 2;
+      return {
+        success: correctGuessersCount < exp,
+        multiplier: 2.5,
+      };
+    }
+
     return { success: false, multiplier: 1.0 };
   }
 

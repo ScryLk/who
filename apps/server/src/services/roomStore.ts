@@ -80,6 +80,10 @@ class RoomStore {
     return this.rooms.get(code.toUpperCase());
   }
 
+  getAllRooms(): RoomState[] {
+    return Array.from(this.rooms.values());
+  }
+
   joinRoom(code: string, playerId: string, nickname: string, avatar: string): { room?: RoomState; error?: string } {
     const room = this.getRoom(code);
     if (!room) {
@@ -110,6 +114,16 @@ class RoomStore {
     return { room };
   }
 
+  setPlayerReady(code: string, playerId: string, isReady: boolean): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+    const player = room.players.find((p) => p.id === playerId);
+    if (player) {
+      player.isReady = isReady;
+    }
+    return room;
+  }
+
   addBotPlayer(code: string): RoomState | undefined {
     const room = this.getRoom(code);
     if (!room || room.players.length >= 12) return undefined;
@@ -133,55 +147,80 @@ class RoomStore {
     return room;
   }
 
-  startMusicSelection(code: string): RoomState | undefined {
+  startPreGameCountdown(code: string): RoomState | undefined {
     const room = this.getRoom(code);
     if (!room) return undefined;
 
-    room.phase = 'MUSIC_SELECTION';
+    room.phase = 'COUNTDOWN';
+    room.timeRemainingSeconds = 5;
     room.submittedTracks = [];
     room.guesserBets = {};
     delete room.ownerBet;
     delete room.currentTrack;
 
-    // Pre-populate bot selections so game progresses smoothly
-    room.players.forEach((player) => {
-      if (player.isBot) {
-        const botTracks: { title: string; artist: string; audioUrl: string; genre: string }[] = [
-          {
-            title: 'Música Secreta do Bot',
-            artist: 'Artista Misterioso',
-            audioUrl: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3',
-            genre: 'Pop',
-          },
-          {
-            title: 'Beat do Robô',
-            artist: 'DJ Bot',
-            audioUrl: 'https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3',
-            genre: 'Funk',
-          },
-        ];
-        const choice = botTracks[Math.floor(Math.random() * botTracks.length)];
-        const track: Track = {
-          id: `bot-track-${player.id}-${Date.now()}`,
-          title: choice.title,
-          artist: choice.artist,
-          audioUrl: choice.audioUrl,
-          genre: choice.genre,
-          submittedByPlayerId: player.id,
-        };
-        room.submittedTracks.push(track);
-      }
-    });
-
     this.addChatMessage(
       room.code,
       'SYSTEM',
       'WHO Bot',
-      'Fase de Escolha de Músicas iniciada! Escolha sua música secreta.',
+      'A partida vai começar em 5 segundos!',
       true
     );
 
     return room;
+  }
+
+  startTurnSequence(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+
+    room.phase = 'MUSIC_SELECTION';
+    room.turnIndex = 0;
+    room.currentTurnPlayerId = room.players[0]?.id;
+    room.turnTimeRemainingSeconds = 50;
+
+    const activePlayer = room.players[0];
+    if (activePlayer) {
+      this.addChatMessage(
+        room.code,
+        'SYSTEM',
+        'WHO Bot',
+        `É a vez de ${activePlayer.nickname} escolher a música!`,
+        true
+      );
+    }
+
+    return room;
+  }
+
+  advanceTurn(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+
+    const nextIndex = (room.turnIndex ?? 0) + 1;
+
+    if (nextIndex < room.players.length) {
+      room.turnIndex = nextIndex;
+      const nextPlayer = room.players[nextIndex];
+      room.currentTurnPlayerId = nextPlayer.id;
+      room.turnTimeRemainingSeconds = 50;
+
+      this.addChatMessage(
+        room.code,
+        'SYSTEM',
+        'WHO Bot',
+        `É a vez de ${nextPlayer.nickname} escolher a música!`,
+        true
+      );
+    } else {
+      // All turns completed! Advance to BETTING phase
+      this.startBettingRound(code);
+    }
+
+    return room;
+  }
+
+  startMusicSelection(code: string): RoomState | undefined {
+    return this.startPreGameCountdown(code);
   }
 
   submitTrack(code: string, playerId: string, trackData: Omit<Track, 'submittedByPlayerId'>): RoomState | undefined {
@@ -202,9 +241,9 @@ class RoomStore {
     room.submittedTracks = room.submittedTracks.filter((t) => t.submittedByPlayerId !== playerId);
     room.submittedTracks.push(track);
 
-    // If all players submitted tracks, proceed to BETTING
-    if (room.submittedTracks.length >= room.players.length) {
-      this.startBettingRound(code);
+    // If submitted during turn sequence, advance turn
+    if (room.phase === 'MUSIC_SELECTION') {
+      return this.advanceTurn(code);
     }
 
     return room;
@@ -212,7 +251,37 @@ class RoomStore {
 
   startBettingRound(code: string): RoomState | undefined {
     const room = this.getRoom(code);
-    if (!room || room.submittedTracks.length === 0) return undefined;
+    if (!room) return undefined;
+
+    // 1. Ensure every player has a secret track assigned
+    const fallbackCatalog = [
+      { title: 'Superstition', artist: 'Stevie Wonder', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3', genre: 'Funk/Soul' },
+      { title: 'Billie Jean', artist: 'Michael Jackson', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3', genre: 'Pop' },
+      { title: 'Take On Me', artist: 'a-ha', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a1e2f8.mp3', genre: 'Synthpop' },
+      { title: 'Evidências', artist: 'Chitãozinho & Xororó', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3', genre: 'Sertanejo' },
+    ];
+
+    room.players.forEach((p, idx) => {
+      const hasTrack = room.submittedTracks.some((t) => t.submittedByPlayerId === p.id);
+      if (!hasTrack) {
+        const fallback = fallbackCatalog[idx % fallbackCatalog.length];
+        const track: Track = {
+          id: `auto-track-${p.id}-${Date.now()}`,
+          title: fallback.title,
+          artist: fallback.artist,
+          audioUrl: fallback.audioUrl,
+          genre: fallback.genre,
+          submittedByPlayerId: p.id,
+        };
+        room.submittedTracks.push(track);
+      }
+    });
+
+    // 2. Shuffle submitted tracks randomly so owner identities are hidden
+    for (let i = room.submittedTracks.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [room.submittedTracks[i], room.submittedTracks[j]] = [room.submittedTracks[j], room.submittedTracks[i]];
+    }
 
     room.phase = 'BETTING';
     const duration = room.mode === 'turbo' ? 15 : 30;
@@ -314,6 +383,7 @@ class RoomStore {
     if (!room || !room.currentTrack) return undefined;
 
     room.phase = 'REVEAL';
+    room.timeRemainingSeconds = 10;
 
     const guesserBetsList = Object.values(room.guesserBets);
     const result = calculateRoundResolution(
