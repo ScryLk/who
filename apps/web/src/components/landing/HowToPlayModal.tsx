@@ -121,7 +121,7 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
           onClick={onClose}
           className="w-full mt-6 py-3.5 rounded-xl bg-gradient-button-yellow font-bold text-slate-950 text-base hover:scale-[1.01] transition"
         >
-          Entendi, Bora Jogar! 🚀
+          Entendi, Bora Jogar!
         </button>
       </div>
     </div>

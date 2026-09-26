@@ -9,7 +9,7 @@ interface PlayerAvatarProps {
 }
 
 export const PlayerAvatar: React.FC<PlayerAvatarProps> = ({
-  avatar = '🎧',
+  avatar = 'https://api.dicebear.com/7.x/bottts/svg?seed=WHO',
   className = '',
   size = 'md',
 }) => {

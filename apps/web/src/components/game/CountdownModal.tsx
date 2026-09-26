@@ -26,7 +26,7 @@ export const CountdownModal: React.FC<CountdownModalProps> = ({ seconds }) => {
           </div>
 
           <h2 className="text-xl md:text-2xl font-black text-white leading-snug">
-            Prepare-se para a 1ª Rodada 🎵
+            Prepare-se para a 1ª Rodada
           </h2>
 
           {/* Animated Countdown Number */}

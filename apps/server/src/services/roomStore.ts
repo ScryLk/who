@@ -4,13 +4,15 @@ import {
   GuesserBet,
   OwnerBet,
   Player,
+  RoomOptions,
   RoomState,
   SecondaryPredictionKind,
   Track,
   calculateRoundResolution,
 } from '@who/shared';
+import { FEATURED_CATALOG } from './musicService';
 
-const BOT_NAMES = ['DJ MixMaster 🎧', 'BeatsHunter 🥁', 'SoundWizard 🧙‍♂️', 'MelodyQueen 👑', 'RhythmRocker 🎸'];
+const BOT_NAMES = ['DJ MixMaster', 'BeatsHunter', 'SoundWizard', 'MelodyQueen', 'RhythmRocker'];
 const BOT_AVATARS = [
   'https://api.dicebear.com/7.x/bottts/svg?seed=DJMixMaster&backgroundColor=facc15',
   'https://api.dicebear.com/7.x/fun-emoji/svg?seed=BeatsHunter&backgroundColor=ec4899',
@@ -34,19 +36,35 @@ class RoomStore {
     return code;
   }
 
-  createRoom(hostId: string, hostNickname: string, avatar: string, mode: GameMode = 'classic', totalRounds: number = 5): RoomState {
+  createRoom(
+    hostId: string,
+    hostNickname: string,
+    avatar: string,
+    mode: GameMode = 'classic',
+    totalRounds: number = 5,
+    options?: RoomOptions
+  ): RoomState {
     const code = this.generateRoomCode();
+    const startingChips = options?.startingChips || 1000;
     const hostPlayer: Player = {
       id: hostId,
       nickname: hostNickname,
-      avatar: avatar || '🎧',
-      chips: 1000,
+      avatar: avatar || 'party-1',
+      chips: startingChips,
       isHost: true,
       isBot: false,
       isReady: true,
     };
 
-    const duration = mode === 'turbo' ? 15 : 30;
+    const bettingDuration = options?.bettingDurationSeconds || (mode === 'turbo' ? 15 : 30);
+    const turnDuration = options?.turnDurationSeconds || 50;
+
+    const roomOptions: RoomOptions = {
+      turnDurationSeconds: turnDuration,
+      bettingDurationSeconds: bettingDuration,
+      startingChips,
+      genreFilter: options?.genreFilter || 'all',
+    };
 
     const room: RoomState = {
       code,
@@ -55,11 +73,13 @@ class RoomStore {
       phase: 'LOBBY',
       currentRound: 1,
       totalRounds,
-      roundDurationSeconds: duration,
-      timeRemainingSeconds: duration,
+      roundDurationSeconds: bettingDuration,
+      timeRemainingSeconds: bettingDuration,
+      turnTimeRemainingSeconds: turnDuration,
       players: [hostPlayer],
       submittedTracks: [],
       guesserBets: {},
+      options: roomOptions,
       chatMessages: [
         {
           id: 'sys-1',
@@ -73,6 +93,25 @@ class RoomStore {
     };
 
     this.rooms.set(code, room);
+    return room;
+  }
+
+  updateRoomOptions(code: string, options: RoomOptions): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+    room.options = { ...room.options, ...options };
+    if (options.bettingDurationSeconds) {
+      room.roundDurationSeconds = options.bettingDurationSeconds;
+      room.timeRemainingSeconds = options.bettingDurationSeconds;
+    }
+    if (options.turnDurationSeconds) {
+      room.turnTimeRemainingSeconds = options.turnDurationSeconds;
+    }
+    if (options.startingChips) {
+      room.players.forEach((p) => {
+        p.chips = options.startingChips!;
+      });
+    }
     return room;
   }
 
@@ -101,7 +140,7 @@ class RoomStore {
       const newPlayer: Player = {
         id: playerId,
         nickname,
-        avatar: avatar || '🎤',
+        avatar: avatar || 'party-2',
         chips: 1000,
         isHost: false,
         isBot: false,
@@ -187,9 +226,39 @@ class RoomStore {
         `É a vez de ${activePlayer.nickname} escolher a música!`,
         true
       );
+      if (activePlayer.isBot) {
+        return this.handleBotTurnIfActive(code);
+      }
     }
 
     return room;
+  }
+
+  handleBotTurnIfActive(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room || room.phase !== 'MUSIC_SELECTION') return undefined;
+
+    const currentTurnPlayer = room.players.find((p) => p.id === room.currentTurnPlayerId);
+    if (!currentTurnPlayer || !currentTurnPlayer.isBot) return room;
+
+    // Pick a track from FEATURED_CATALOG not yet submitted in this room
+    const submittedTitles = new Set(room.submittedTracks.map((t) => t.title.toLowerCase()));
+    const available = FEATURED_CATALOG.filter((t) => !submittedTitles.has(t.title.toLowerCase()));
+    const chosen = available.length > 0
+      ? available[Math.floor(Math.random() * available.length)]
+      : FEATURED_CATALOG[Math.floor(Math.random() * FEATURED_CATALOG.length)];
+
+    const botTrack: Omit<Track, 'submittedByPlayerId'> = {
+      id: `bot-track-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      title: chosen.title,
+      artist: chosen.artist,
+      albumArt: chosen.albumArt,
+      audioUrl: chosen.audioUrl,
+      genre: chosen.genre,
+      startTimeSeconds: 0,
+    };
+
+    return this.submitTrack(code, currentTurnPlayer.id, botTrack);
   }
 
   advanceTurn(code: string): RoomState | undefined {
@@ -211,6 +280,10 @@ class RoomStore {
         `É a vez de ${nextPlayer.nickname} escolher a música!`,
         true
       );
+
+      if (nextPlayer.isBot) {
+        return this.handleBotTurnIfActive(code);
+      }
     } else {
       // All turns completed! Advance to BETTING phase
       this.startBettingRound(code);
@@ -253,22 +326,19 @@ class RoomStore {
     const room = this.getRoom(code);
     if (!room) return undefined;
 
-    // 1. Ensure every player has a secret track assigned
-    const fallbackCatalog = [
-      { title: 'Superstition', artist: 'Stevie Wonder', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3', genre: 'Funk/Soul' },
-      { title: 'Billie Jean', artist: 'Michael Jackson', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3', genre: 'Pop' },
-      { title: 'Take On Me', artist: 'a-ha', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a1e2f8.mp3', genre: 'Synthpop' },
-      { title: 'Evidências', artist: 'Chitãozinho & Xororó', audioUrl: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3', genre: 'Sertanejo' },
-    ];
-
+    // 1. Ensure every player has a secret track assigned with guaranteed working audio preview
+    const submittedTitles = new Set(room.submittedTracks.map((t) => t.title.toLowerCase()));
     room.players.forEach((p, idx) => {
       const hasTrack = room.submittedTracks.some((t) => t.submittedByPlayerId === p.id);
       if (!hasTrack) {
-        const fallback = fallbackCatalog[idx % fallbackCatalog.length];
+        const available = FEATURED_CATALOG.filter((t) => !submittedTitles.has(t.title.toLowerCase()));
+        const fallback = available.length > 0 ? available[0] : FEATURED_CATALOG[idx % FEATURED_CATALOG.length];
+        submittedTitles.add(fallback.title.toLowerCase());
         const track: Track = {
           id: `auto-track-${p.id}-${Date.now()}`,
           title: fallback.title,
           artist: fallback.artist,
+          albumArt: fallback.albumArt,
           audioUrl: fallback.audioUrl,
           genre: fallback.genre,
           submittedByPlayerId: p.id,
@@ -283,13 +353,14 @@ class RoomStore {
       [room.submittedTracks[i], room.submittedTracks[j]] = [room.submittedTracks[j], room.submittedTracks[i]];
     }
 
+    room.totalRounds = Math.max(room.totalRounds, room.submittedTracks.length);
+    room.currentRound = 1;
     room.phase = 'BETTING';
-    const duration = room.mode === 'turbo' ? 15 : 30;
+    const duration = room.options?.bettingDurationSeconds || (room.mode === 'turbo' ? 15 : 30);
     room.timeRemainingSeconds = duration;
 
-    // Pick track for current round
-    const trackIndex = (room.currentRound - 1) % room.submittedTracks.length;
-    room.currentTrack = room.submittedTracks[trackIndex];
+    // Pick first track for round 1
+    room.currentTrack = room.submittedTracks[0];
     room.guesserBets = {};
     delete room.ownerBet;
 
@@ -420,14 +491,57 @@ class RoomStore {
     const room = this.getRoom(code);
     if (!room) return undefined;
 
-    if (room.currentRound >= room.totalRounds) {
+    if (room.currentRound >= room.totalRounds || room.currentRound >= room.submittedTracks.length) {
       room.phase = 'GAME_OVER';
       this.addChatMessage(room.code, 'SYSTEM', 'WHO Bot', 'Fim de jogo! Confira o ranking final.', true);
       return room;
     }
 
+    // Advance directly to the next secret track in the playlist
     room.currentRound += 1;
-    return this.startMusicSelection(code);
+    const nextTrackIndex = room.currentRound - 1;
+    room.currentTrack = room.submittedTracks[nextTrackIndex];
+
+    room.phase = 'BETTING';
+    const duration = room.options?.bettingDurationSeconds || (room.mode === 'turbo' ? 15 : 30);
+    room.timeRemainingSeconds = duration;
+    room.guesserBets = {};
+    delete room.ownerBet;
+
+    // Setup bot bets for this round
+    const ownerId = room.currentTrack.submittedByPlayerId;
+    room.players.forEach((player) => {
+      if (player.isBot) {
+        if (player.id === ownerId) {
+          const predictions: SecondaryPredictionKind[] = ['NONE', 'PLAYER_COUNT', 'SPECIFIC_PLAYERS'];
+          const randPred = predictions[Math.floor(Math.random() * predictions.length)];
+          room.ownerBet = {
+            ownerId: player.id,
+            predictionKind: randPred,
+            chipAmount: 150,
+          };
+        } else {
+          const nonOwnerPlayers = room.players.filter((p) => p.id !== ownerId);
+          const targetPlayer =
+            nonOwnerPlayers[Math.floor(Math.random() * nonOwnerPlayers.length)] || room.players[0];
+          room.guesserBets[player.id] = {
+            guesserId: player.id,
+            targetOwnerId: targetPlayer.id,
+            chipAmount: 100,
+          };
+        }
+      }
+    });
+
+    this.addChatMessage(
+      room.code,
+      'SYSTEM',
+      'WHO Bot',
+      `Rodada ${room.currentRound}/${room.totalRounds}! Ouçam a música e façam suas apostas.`,
+      true
+    );
+
+    return room;
   }
 
   addChatMessage(code: string, senderId: string, senderName: string, text: string, isSystem = false): ChatMessage | undefined {

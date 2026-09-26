@@ -14,7 +14,7 @@ export const QuickPlayBanner: React.FC<QuickPlayBannerProps> = ({ onQuickPlay })
         Jogue Agora!
       </h2>
       <p className="text-cyan-200 text-lg md:text-xl mb-8 font-medium">
-        Não precisa baixar nada! Jogue direto no seu navegador 🚀
+        Não precisa baixar nada! Jogue direto no seu navegador
       </p>
 
       {/* Device Badges */}
@@ -43,7 +43,7 @@ export const QuickPlayBanner: React.FC<QuickPlayBannerProps> = ({ onQuickPlay })
       >
         <div className="flex items-center gap-3 justify-center">
           <Gamepad2 className="w-8 h-8 text-slate-950 group-hover:rotate-12 transition-transform" />
-          <span>🎮 JOGAR AGORA - GRÁTIS!</span>
+          <span>JOGAR AGORA - GRÁTIS!</span>
         </div>
         <p className="text-xs text-slate-900 font-bold opacity-80 mt-1">
           Sem cadastro • Sem download • Diversão instantânea

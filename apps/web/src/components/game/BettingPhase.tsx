@@ -25,8 +25,7 @@ interface BettingPhaseProps {
   onResolveRound: () => void;
 }
 
-const EMOJIS = ['😂', '🎉', '❤️', '😯'];
-const EMOJI_BADGES = ['😊', '🤔', '🎵', '😎', '🤨', '🎤', '🎸', '🥁'];
+const REACTION_LABELS = ['Bravos', 'Sensacional', 'Mestre', 'Genial'];
 const QUICK_CHIP_AMOUNTS = [50, 100, 200, 500];
 
 export const BettingPhase: React.FC<BettingPhaseProps> = ({
@@ -197,7 +196,7 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
           <div className="bg-white/20 backdrop-blur-xl rounded-3xl p-6 border border-white/30 shadow-xl text-center relative overflow-hidden">
             <h3 className="text-lg md:text-xl font-bold mb-4 flex items-center justify-center gap-2">
               <Headphones className="w-5 h-5 text-yellow-300 animate-bounce-subtle" />
-              Escute e adivinhe quem escolheu esta música 🎶
+              <span>Escute e adivinhe quem escolheu esta música</span>
             </h3>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-4">
@@ -426,7 +425,7 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
                   <span>
                     {submittedBet
                       ? 'Voto Confirmado e Registrado!'
-                      : `CONFIRMAR PREVISÃO (${chipBet} 🪙) 🚀`}
+                      : `CONFIRMAR PREVISÃO (${chipBet} pts)`}
                   </span>
                 </button>
               </div>
@@ -439,10 +438,9 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
 
                 {/* 8 Player Avatar Selection Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {room.players.map((player: Player, idx: number) => {
+                  {room.players.map((player: Player) => {
                     const isMe = player.id === myPlayerId;
                     const isSelected = selectedOwnerId === player.id;
-                    const emojiBadge = EMOJI_BADGES[idx % EMOJI_BADGES.length];
 
                     return (
                       <div
@@ -462,9 +460,6 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
                       >
                         <div className="relative mb-2">
                           <PlayerAvatar avatar={player.avatar} size="lg" className="border-2 border-yellow-300 shadow-inner bg-white/20" />
-                          <div className="absolute -bottom-1 -right-1 text-xs bg-slate-900/80 p-1 rounded-full border border-white/30">
-                            {emojiBadge}
-                          </div>
                         </div>
 
                         <span className="font-bold text-white text-sm truncate max-w-full">
@@ -474,8 +469,9 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
                           <span className="text-[10px] text-yellow-200 font-semibold">(Você)</span>
                         ) : (
                           isSelected && (
-                            <span className="text-[10px] bg-yellow-400 text-slate-950 font-black px-2 py-0.5 rounded-full mt-1">
-                              PALPITE ✓
+                            <span className="text-[10px] bg-yellow-400 text-slate-950 font-black px-2 py-0.5 rounded-full mt-1 inline-flex items-center gap-1">
+                              <span>PALPITE</span>
+                              <Check className="w-3 h-3" />
                             </span>
                           )
                         )}
@@ -652,8 +648,8 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
                     {submittedBet
                       ? 'Voto Confirmado e Registrado!'
                       : selectedOwnerId
-                      ? `CONFIRMAR VOTO (${chipBet} 🪙) 🚀`
-                      : 'SELECIONE UM JOGADOR ACIMA 👆'}
+                      ? `CONFIRMAR VOTO (${chipBet} pts)`
+                      : 'SELECIONE UM JOGADOR ACIMA'}
                   </span>
                 </button>
               </div>
@@ -696,13 +692,13 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
           </div>
 
           <div className="flex items-center justify-around py-2 border-t border-white/20 my-2">
-            {EMOJIS.map((emoji) => (
+            {REACTION_LABELS.map((label) => (
               <button
-                key={emoji}
-                onClick={() => handleSendReaction(emoji)}
-                className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/30 text-xl flex items-center justify-center transition hover:scale-125"
+                key={label}
+                onClick={() => handleSendReaction(`[${label}]`)}
+                className="px-2 py-1 rounded-xl bg-white/15 hover:bg-white/30 text-[10px] font-extrabold text-white transition hover:scale-105 border border-white/20"
               >
-                {emoji}
+                {label}
               </button>
             ))}
           </div>
@@ -730,7 +726,7 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
           </div>
           <div>
             <span className="font-bold block text-yellow-300">DJ Host</span>
-            <span className="text-white/80">Música escolhida por: ??? 🤫</span>
+            <span className="text-white/80">Música escolhida por: ??? (Secreto)</span>
           </div>
         </div>
 

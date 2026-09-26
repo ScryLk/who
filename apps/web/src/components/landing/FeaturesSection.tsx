@@ -7,7 +7,7 @@ export const FeaturesSection: React.FC = () => {
   return (
     <section className="py-14 px-4 max-w-6xl mx-auto text-center">
       <h2 className="text-4xl md:text-5xl font-extrabold text-white mb-2 tracking-wide">
-        Por que jogar <span className="text-cyan-300">Who?</span>🔊
+        Por que jogar <span className="text-cyan-300">Who?</span>
       </h2>
       <p className="text-blue-200 text-lg mb-10">Diversão garantida com seus amigos!</p>
 

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: who-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  who-monorepo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: who-app
+    ports:
+      - "3000:3000"
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    restart: always

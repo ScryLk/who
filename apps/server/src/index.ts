@@ -37,5 +37,5 @@ setupSocketHandlers(io);
 
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
-  console.log(`🚀 WHO Server running on http://localhost:${PORT}`);
+  console.log(`[SERVER] WHO Server running on http://localhost:${PORT}`);
 });

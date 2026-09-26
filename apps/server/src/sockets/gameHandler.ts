@@ -14,11 +14,19 @@ export function setupSocketHandlers(io: Server) {
         }
         io.to(room.code).emit('room_updated', room);
       } else if (room.phase === 'MUSIC_SELECTION') {
-        room.turnTimeRemainingSeconds = (room.turnTimeRemainingSeconds ?? 50) - 1;
-        if (room.turnTimeRemainingSeconds <= 0) {
-          roomStore.advanceTurn(room.code);
+        const currentTurnPlayer = room.players.find((p) => p.id === room.currentTurnPlayerId);
+        if (currentTurnPlayer?.isBot) {
+          const updated = roomStore.handleBotTurnIfActive(room.code);
+          io.to(room.code).emit('room_updated', updated || room);
+        } else {
+          room.turnTimeRemainingSeconds = (room.turnTimeRemainingSeconds ?? 50) - 1;
+          if (room.turnTimeRemainingSeconds <= 0) {
+            const updated = roomStore.advanceTurn(room.code);
+            io.to(room.code).emit('room_updated', updated || room);
+          } else {
+            io.to(room.code).emit('room_updated', room);
+          }
         }
-        io.to(room.code).emit('room_updated', room);
       } else if (room.phase === 'BETTING') {
         room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 30) - 1;
         if (room.timeRemainingSeconds <= 0) {
@@ -54,20 +62,63 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // Create Room
-    socket.on('create_room', (data: { nickname: string; avatar: string; mode?: any; totalRounds?: number }, callback) => {
+    socket.on('create_room', (data: { nickname: string; avatar: string; mode?: any; totalRounds?: number; options?: any }, callback) => {
       try {
         const room = roomStore.createRoom(
           socket.id,
           data.nickname,
           data.avatar,
           data.mode || 'classic',
-          data.totalRounds || 5
+          data.totalRounds || 5,
+          data.options
         );
         socket.join(room.code);
         callback({ success: true, room, playerId: socket.id });
         io.to(room.code).emit('room_updated', room);
       } catch (err: any) {
         callback({ success: false, error: err.message });
+      }
+    });
+
+    // Update Room Options
+    socket.on('update_room_options', (data: { roomCode: string; options: any }, callback) => {
+      try {
+        const room = roomStore.updateRoomOptions(data.roomCode, data.options);
+        if (room) {
+          if (typeof callback === 'function') callback({ success: true, room });
+          io.to(room.code).emit('room_updated', room);
+        } else {
+          if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada.' });
+        }
+      } catch (err: any) {
+        if (typeof callback === 'function') callback({ success: false, error: err.message });
+      }
+    });
+
+    // Reconnect Session
+    socket.on('reconnect_session', (data: { roomCode: string; previousPlayerId: string }, callback) => {
+      try {
+        const room = roomStore.getRoom(data.roomCode);
+        if (!room) {
+          return callback({ success: false, error: 'Sala não encontrada.' });
+        }
+        const existingPlayer = room.players.find((p) => p.id === data.previousPlayerId);
+        if (existingPlayer) {
+          existingPlayer.id = socket.id;
+          if (room.hostId === data.previousPlayerId) {
+            room.hostId = socket.id;
+          }
+          if (room.currentTurnPlayerId === data.previousPlayerId) {
+            room.currentTurnPlayerId = socket.id;
+          }
+          socket.join(room.code);
+          if (typeof callback === 'function') callback({ success: true, room, playerId: socket.id });
+          io.to(room.code).emit('room_updated', room);
+        } else {
+          if (typeof callback === 'function') callback({ success: false, error: 'Jogador não encontrado na sala.' });
+        }
+      } catch (err: any) {
+        if (typeof callback === 'function') callback({ success: false, error: err.message });
       }
     });
 

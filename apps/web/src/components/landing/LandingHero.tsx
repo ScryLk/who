@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Headphones, LogIn, HelpCircle, Music } from 'lucide-react';
+import { Headphones, LogIn, HelpCircle, Music, Disc } from 'lucide-react';
 
 interface LandingHeroProps {
   onCreateRoom: () => void;
@@ -17,14 +17,15 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
   return (
     <section className="relative py-12 px-4 text-center overflow-hidden flex flex-col items-center justify-center">
       {/* Floating music note accents */}
-      <div className="absolute top-10 left-[10%] text-yellow-300 text-3xl opacity-70 animate-float">
-        🎵
+      {/* Floating Background Icons */}
+      <div className="absolute top-10 left-[10%] text-yellow-300 opacity-70 animate-float">
+        <Music className="w-8 h-8" />
       </div>
-      <div className="absolute bottom-12 right-[12%] text-cyan-300 text-3xl opacity-70 animate-float delay-1000">
-        🎶
+      <div className="absolute bottom-12 right-[12%] text-cyan-300 opacity-70 animate-float delay-1000">
+        <Disc className="w-8 h-8 animate-spin" style={{ animationDuration: '8s' }} />
       </div>
-      <div className="absolute top-20 right-[18%] text-purple-300 text-2xl opacity-60 animate-float delay-500">
-        🎧
+      <div className="absolute top-20 right-[18%] text-purple-300 opacity-60 animate-float delay-500">
+        <Headphones className="w-7 h-7" />
       </div>
 
       <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white/10 border border-white/20 text-cyan-200 text-sm font-semibold mb-6 shadow-inner">
@@ -51,7 +52,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
             <span>Criar Sala</span>
           </div>
           <span className="text-xs font-semibold text-slate-800 opacity-90 mt-0.5">
-            Seja o DJ da festa! 🎧
+            Seja o DJ da festa!
           </span>
         </button>
 
@@ -64,7 +65,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
             <span>Entrar em Sala</span>
           </div>
           <span className="text-xs font-semibold text-slate-800 opacity-90 mt-0.5">
-            Junte-se à diversão! 🎵
+            Junte-se à diversão!
           </span>
         </button>
 
@@ -77,7 +78,7 @@ export const LandingHero: React.FC<LandingHeroProps> = ({
             <span>Como Jogar</span>
           </div>
           <span className="text-xs font-semibold text-purple-200 mt-0.5">
-            Aprenda as regras! ❓
+            Aprenda as regras!
           </span>
         </button>
       </div>

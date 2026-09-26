@@ -22,11 +22,13 @@ import {
   Coins,
   Film,
   Video,
+  ArrowRight,
 } from 'lucide-react';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 import { CustomSelect, SelectOption } from '@/components/common/CustomSelect';
 import { BackgroundMusic } from '@/components/common/BackgroundMusic';
 import { CountdownModal } from '@/components/game/CountdownModal';
+import { AudioWaveformScrubber } from '@/components/game/AudioWaveformScrubber';
 import { getSocket } from '@/lib/socket';
 
 interface RoomLobbyProps {
@@ -71,23 +73,18 @@ const PLAYER_CARD_COLORS = [
   },
 ];
 
-const DEFAULT_EMOJIS = ['😂', '🎉', '❤️', '🎤', '🔥'];
-
 const PREDICTION_OPTIONS: SelectOption<SecondaryPredictionKind>[] = [
   {
     value: 'SPECIFIC_PLAYERS',
     label: 'Jogador especifico(s) adivinharem a música',
-    icon: '🎯',
   },
   {
     value: 'PLAYER_COUNT',
     label: 'Quantos jogadores',
-    icon: '🎯',
   },
   {
     value: 'NONE',
     label: 'Nenhum jogador',
-    icon: '🎯',
   },
 ];
 
@@ -121,14 +118,23 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   const [isSearching, setIsSearching] = useState(false);
   const [selectedTrack, setSelectedTrack] = useState<any | null>(null);
 
-  // Video & Start Time Offset State
-  const [isVideo, setIsVideo] = useState(false);
-  const [startMinutes, setStartMinutes] = useState(0);
-  const [startSecs, setStartSecs] = useState(0);
+  // Snippet Start Time Offset State
   const [startTimeSeconds, setStartTimeSeconds] = useState(0);
 
+  // Dedicated Active Tab for Music Selection Phase ('MUSIC' | 'PREDICTION')
+  const [activeSelectionTab, setActiveSelectionTab] = useState<'MUSIC' | 'PREDICTION'>('MUSIC');
+
+  // Preview Audio Engine (MUSIC_SELECTION phase)
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
-  const [audioObj, setAudioObj] = useState<HTMLAudioElement | null>(null);
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
+  const [trackDuration, setTrackDuration] = useState<number>(30);
+
+  // Round Secret Audio Engine (BETTING phase)
+  const roundAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlayingRound, setIsPlayingRound] = useState(false);
+  const [roundCurrentTime, setRoundCurrentTime] = useState(0);
+  const [roundDuration, setRoundDuration] = useState(30);
 
   // Prediction Category & Betting State
   const [selectedCategory, setSelectedCategory] = useState<SecondaryPredictionKind>('SPECIFIC_PLAYERS');
@@ -150,6 +156,44 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   // Turn status checks
   const isMyTurn = room.phase === 'MUSIC_SELECTION' && room.currentTurnPlayerId === myPlayerId;
   const currentTurnPlayer = room.players.find((p) => p.id === room.currentTurnPlayerId);
+
+  const formatTime = (secsInput: number) => {
+    const m = Math.floor(secsInput / 60);
+    const s = Math.floor(secsInput % 60);
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // Cleanup audios on unmount
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+      if (roundAudioRef.current) {
+        roundAudioRef.current.pause();
+        roundAudioRef.current = null;
+      }
+    };
+  }, []);
+
+  // When phase is not MUSIC_SELECTION, pause preview
+  useEffect(() => {
+    if (room.phase !== 'MUSIC_SELECTION' && previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setIsPlayingPreview(false);
+    }
+  }, [room.phase]);
+
+  // When phase is not BETTING or round changes, reset round audio
+  useEffect(() => {
+    if (roundAudioRef.current) {
+      roundAudioRef.current.pause();
+      roundAudioRef.current = null;
+      setIsPlayingRound(false);
+      setRoundCurrentTime(0);
+    }
+  }, [room.phase, room.currentRound]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -173,42 +217,163 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     socket.emit('set_ready', { roomCode: room.code, isReady: newReady });
   };
 
+  // Live debounced search as user types
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setIsSearching(true);
+      const socket = getSocket();
+      socket.emit('search_tracks', { query: trimmed }, (res: any) => {
+        setIsSearching(false);
+        if (res && res.success && res.results) {
+          setSearchResults(res.results);
+        }
+      });
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return;
     setIsSearching(true);
     const socket = getSocket();
-    socket.emit('search_tracks', { query: searchQuery }, (res: any) => {
+    socket.emit('search_tracks', { query: trimmed }, (res: any) => {
       setIsSearching(false);
-      if (res && res.success && res.results.length > 0) {
+      if (res && res.success && res.results) {
         setSearchResults(res.results);
-        const track = res.results[0];
-        setSelectedTrack(track);
-        if (track.isVideo) {
-          setIsVideo(true);
-        }
-        if (track.startTimeSeconds) {
-          setStartTimeSeconds(track.startTimeSeconds);
-          setStartMinutes(Math.floor(track.startTimeSeconds / 60));
-          setStartSecs(track.startTimeSeconds % 60);
-        }
       }
     });
   };
 
-  const togglePlayTrack = () => {
-    const activeAudioUrl = selectedTrack?.audioUrl || room.currentTrack?.audioUrl;
-    if (!activeAudioUrl) return;
+  const handleSelectTrack = (track: any) => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+      setIsPlayingPreview(false);
+      setPreviewCurrentTime(0);
+    }
+    setSelectedTrack(track);
+    const startSec = track.startTimeSeconds || 0;
+    setStartTimeSeconds(startSec);
+    setSearchResults([]);
+  };
+
+  const handleStartTimeChange = (sec: number) => {
+    setStartTimeSeconds(sec);
+    if (previewAudioRef.current) {
+      try {
+        previewAudioRef.current.currentTime = sec;
+        setPreviewCurrentTime(sec);
+      } catch (e) {}
+    }
+  };
+
+  const togglePlayPreview = () => {
+    if (!selectedTrack?.audioUrl) return;
+
     if (isPlayingPreview) {
-      audioObj?.pause();
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+      }
       setIsPlayingPreview(false);
     } else {
-      audioObj?.pause();
-      const audio = new Audio(activeAudioUrl);
-      audio.play().catch(() => {});
-      setAudioObj(audio);
-      setIsPlayingPreview(true);
-      audio.onended = () => setIsPlayingPreview(false);
+      let audio = previewAudioRef.current;
+      const isNew = !audio || audio.src !== selectedTrack.audioUrl;
+
+      if (isNew) {
+        if (audio) audio.pause();
+        audio = new Audio(selectedTrack.audioUrl);
+        previewAudioRef.current = audio;
+
+        audio.ontimeupdate = () => {
+          if (audio) setPreviewCurrentTime(audio.currentTime);
+        };
+        audio.onloadedmetadata = () => {
+          if (audio && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+            setTrackDuration(Math.floor(audio.duration));
+          }
+        };
+        audio.onended = () => {
+          setIsPlayingPreview(false);
+        };
+        audio.onerror = () => {
+          setIsPlayingPreview(false);
+        };
+
+        try {
+          audio.currentTime = startTimeSeconds;
+        } catch (e) {}
+      }
+
+      if (audio) {
+        audio
+          .play()
+          .then(() => setIsPlayingPreview(true))
+          .catch((err) => {
+            console.warn('Audio preview play error:', err);
+            setIsPlayingPreview(false);
+          });
+      }
+    }
+  };
+
+  const togglePlayRoundAudio = () => {
+    const audioUrl = room.currentTrack?.audioUrl;
+    if (!audioUrl) return;
+
+    if (isPlayingRound) {
+      if (roundAudioRef.current) {
+        roundAudioRef.current.pause();
+      }
+      setIsPlayingRound(false);
+    } else {
+      let audio = roundAudioRef.current;
+      const isNew = !audio || audio.src !== audioUrl;
+
+      if (isNew) {
+        if (audio) audio.pause();
+        audio = new Audio(audioUrl);
+        roundAudioRef.current = audio;
+
+        audio.ontimeupdate = () => {
+          if (audio) setRoundCurrentTime(audio.currentTime);
+        };
+        audio.onloadedmetadata = () => {
+          if (audio && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+            setRoundDuration(Math.floor(audio.duration));
+          }
+        };
+        audio.onended = () => {
+          setIsPlayingRound(false);
+          setRoundCurrentTime(0);
+        };
+        audio.onerror = () => {
+          setIsPlayingRound(false);
+        };
+
+        if (room.currentTrack?.startTimeSeconds) {
+          try {
+            audio.currentTime = room.currentTrack.startTimeSeconds;
+          } catch (e) {}
+        }
+      }
+
+      if (audio) {
+        audio
+          .play()
+          .then(() => setIsPlayingRound(true))
+          .catch((err) => {
+            console.warn('Round audio play error:', err);
+            setIsPlayingRound(false);
+          });
+      }
     }
   };
 
@@ -218,8 +383,6 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     setIsReady(true);
     const trackToSubmit = {
       ...selectedTrack,
-      isVideo: isVideo || selectedTrack.isVideo || false,
-      youtubeId: selectedTrack.youtubeId || extractYouTubeId(selectedTrack.audioUrl) || extractYouTubeId(searchQuery) || undefined,
       startTimeSeconds: startTimeSeconds || selectedTrack.startTimeSeconds || 0,
     };
     if (onSubmitTrack) {
@@ -254,16 +417,16 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   };
 
   const handleRandomizeTrack = () => {
-    const randomQuery = ['pop 80s', 'rock brasil', 'funk hits', 'mpb classico', 'dance synth'][
+    const randomQuery = ['pop hits', 'rock brasil', 'funk hits', 'mpb classico', 'pagode anos 90'][
       Math.floor(Math.random() * 5)
     ];
     setIsSearching(true);
     const socket = getSocket();
     socket.emit('search_tracks', { query: randomQuery }, (res: any) => {
       setIsSearching(false);
-      if (res && res.success && res.results.length > 0) {
+      if (res && res.success && res.results && res.results.length > 0) {
         const randomTrack = res.results[Math.floor(Math.random() * res.results.length)];
-        setSelectedTrack(randomTrack);
+        handleSelectTrack(randomTrack);
       }
     });
   };
@@ -275,7 +438,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   const maxPlayers = 8;
 
   return (
-    <div className="h-screen max-h-screen w-full bg-gradient-main text-white p-3 md:p-5 flex flex-col justify-between overflow-hidden font-outfit select-none relative">
+    <div className="min-h-screen lg:h-screen lg:max-h-screen w-full bg-gradient-main text-white p-3 md:p-5 flex flex-col justify-between overflow-y-auto lg:overflow-hidden font-outfit select-none relative">
       {/* 5-Second Countdown Modal Overlay */}
       {room.phase === 'COUNTDOWN' && (
         <CountdownModal seconds={room.timeRemainingSeconds ?? 5} />
@@ -285,8 +448,9 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
       <header className="w-full flex items-center justify-between mb-3 flex-shrink-0">
         {/* Logo Canto Superior Esquerdo */}
         <div className="flex items-center gap-2">
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white drop-shadow">
-            Who<span className="text-yellow-400">?</span> <span className="text-yellow-400 text-2xl">🎵</span>
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white drop-shadow flex items-center gap-1">
+            <span>Who</span><span className="text-yellow-400">?</span>
+            <Music className="w-8 h-8 text-yellow-400 inline-block ml-1" />
           </h1>
         </div>
 
@@ -311,10 +475,10 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
       </header>
 
       {/* 3-Column Main Dashboard Container */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 overflow-hidden min-h-0">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 overflow-visible lg:overflow-hidden min-h-0">
         
         {/* 2. PAINEL ESQUERDO: Lista de Jogadores Reais (col-span-3) */}
-        <div className="lg:col-span-3 glass-card p-4 rounded-3xl border border-white/15 flex flex-col justify-between overflow-hidden backdrop-blur-md bg-slate-900/40 h-full">
+        <div className="lg:col-span-3 glass-card p-4 rounded-3xl border border-white/15 flex flex-col justify-between overflow-hidden backdrop-blur-md bg-slate-900/40 lg:h-full min-h-[300px]">
           <div className="flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -354,7 +518,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                 if (isCurrentTurn) {
                   cardBgClass =
                     'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 border-2 border-yellow-100 shadow-glow-yellow animate-pulse rounded-2xl overflow-hidden backdrop-blur-md';
-                  statusText = `🎯 Escolhendo... (${room.turnTimeRemainingSeconds ?? 50}s)`;
+                  statusText = `Escolhendo... (${room.turnTimeRemainingSeconds ?? 50}s)`;
                   statusIcon = <Clock className="w-3 h-3 text-slate-950 animate-spin" />;
                 } else if (isPlayerHost) {
                   statusText = 'Líder da sala';
@@ -483,370 +647,421 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                   </p>
                   {currentTurnPlayer?.isBot && (
                     <span className="inline-block mt-2 px-3 py-1 rounded-full bg-purple-600/30 border border-purple-400/40 text-purple-300 text-[10px] font-bold">
-                      🤖 Bot aguardando cronômetro...
+                      <span>Bot aguardando cronômetro...</span>
                     </span>
                   )}
                 </div>
               </div>
             )}
 
-            {/* FASE 2: MUSIC_SELECTION (Seu Turno) */}
+            {/* FASE 2: MUSIC_SELECTION (Seu Turno com Abas Dedicadas) */}
             {room.phase === 'MUSIC_SELECTION' && isMyTurn && (
-              <>
-                <div className="text-left space-y-1.5">
-                  <label className="text-xs font-semibold text-yellow-300 flex items-center gap-1">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Sua vez! Cole o link da música ou digite o nome</span>
-                  </label>
-                  <form onSubmit={handleSearch} className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Pesquise por música, artista ou cole o link..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="flex-1 px-4 py-2.5 rounded-xl bg-white/10 border border-yellow-400/40 text-white placeholder-blue-200/50 text-xs focus:outline-none focus:border-yellow-400 transition"
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold transition flex items-center justify-center shadow-glow-yellow"
-                    >
-                      {isSearching ? <div className="w-4 h-4 rounded-full border-2 border-slate-950 border-t-transparent animate-spin" /> : <Search className="w-4 h-4" />}
-                    </button>
-                  </form>
+              <div className="space-y-3 flex-1 flex flex-col justify-between custom-scrollbar overflow-y-auto pr-1">
+                {/* Abas Dedicadas no Topo do Painel Central */}
+                <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-white/10 border border-white/15 backdrop-blur-md">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSelectionTab('MUSIC')}
+                    className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition active:scale-95 ${
+                      activeSelectionTab === 'MUSIC'
+                        ? 'bg-gradient-to-r from-yellow-400 to-amber-400 text-slate-950 shadow-glow-yellow'
+                        : 'text-white/80 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Music className="w-4 h-4" />
+                    <span>1. Escolher Música & Trecho</span>
+                    {selectedTrack && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveSelectionTab('PREDICTION')}
+                    className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition active:scale-95 ${
+                      activeSelectionTab === 'PREDICTION'
+                        ? 'bg-gradient-to-r from-yellow-400 to-amber-400 text-slate-950 shadow-glow-yellow'
+                        : 'text-white/80 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Star className="w-4 h-4" />
+                    <span>2. Previsão do Dono</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-pink-500/30 text-pink-300 border border-pink-400/30 font-bold">
+                      Apostas
+                    </span>
+                  </button>
                 </div>
 
-                {searchResults.length > 1 && (
-                  <div className="max-h-32 overflow-y-auto custom-scrollbar space-y-1 bg-slate-950/80 p-2 rounded-xl border border-white/10 backdrop-blur-md overflow-hidden">
-                    {searchResults.map((track) => (
-                      <div
-                        key={track.id}
-                        onClick={() => {
-                          setSelectedTrack(track);
-                          setSearchResults([]);
-                        }}
-                        className={`p-2 rounded-lg cursor-pointer text-xs flex items-center justify-between hover:bg-white/10 ${
-                          selectedTrack?.id === track.id ? 'bg-yellow-400/20 text-yellow-300 font-bold' : 'text-white'
-                        }`}
-                      >
-                        <span className="truncate">{track.title} — {track.artist}</span>
-                        <span className="text-[10px] text-cyan-300">Selecionar</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {/* CONTEÚDO DA ABA 1: MÚSICA & GRÁFICO SONORO */}
+                {activeSelectionTab === 'MUSIC' && (
+                  <div className="space-y-3">
+                    {/* Campo de Busca Superior (Moveu para o Topo) */}
+                    <div className="text-left space-y-1.5">
+                      <label className="text-xs font-semibold text-yellow-300 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Sua vez! Digite o nome da música ou artista</span>
+                        </span>
+                        {selectedTrack && (
+                          <span className="text-[10px] text-cyan-300 font-mono">
+                            Faixa selecionada
+                          </span>
+                        )}
+                      </label>
+                      <form onSubmit={handleSearch} className="flex gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            placeholder="Digite para buscar músicas (ex: Evidências, Billie Jean, Pop...)"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-xl bg-white/10 border border-yellow-400/40 text-white placeholder-blue-200/50 text-xs focus:outline-none focus:border-yellow-400 transition pr-8"
+                          />
+                          {isSearching && (
+                            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-yellow-400 border-t-transparent animate-spin" />
+                          )}
+                        </div>
+                        <button
+                          type="submit"
+                          className="px-4 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold transition flex items-center justify-center shadow-glow-yellow flex-shrink-0"
+                          title="Buscar música"
+                        >
+                          <Search className="w-4 h-4" />
+                        </button>
+                      </form>
+                    </div>
 
-                {selectedTrack ? (
-                  <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-600/40 via-pink-600/40 to-rose-600/40 border border-pink-400/40 flex items-center gap-4 shadow-xl overflow-hidden backdrop-blur-md">
-                    {selectedTrack.albumArt ? (
-                      <img
-                        src={selectedTrack.albumArt}
-                        alt={selectedTrack.title}
-                        className="w-14 h-14 rounded-2xl object-cover shadow-lg border border-pink-300/40 flex-shrink-0"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 flex items-center justify-center shadow-lg border border-pink-300/40 flex-shrink-0">
-                        <Music className="w-7 h-7 text-white" />
+                    {/* Resultados de Busca Instantâneos (Aparece logo abaixo do campo sem precisar da lupa) */}
+                    {searchResults.length > 0 && (
+                      <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-1 bg-slate-950/90 p-2.5 rounded-2xl border border-yellow-400/30 backdrop-blur-xl shadow-2xl">
+                        <div className="text-[10px] font-bold text-yellow-300 px-1 pb-1 flex items-center justify-between border-b border-white/10">
+                          <span>Músicas Encontradas:</span>
+                          <span className="text-white/60">Clique para selecionar</span>
+                        </div>
+                        {searchResults.map((track) => {
+                          const isCurrent = selectedTrack?.id === track.id;
+                          return (
+                            <div
+                              key={track.id}
+                              onClick={() => handleSelectTrack(track)}
+                              className={`p-2 rounded-xl cursor-pointer text-xs flex items-center justify-between gap-3 transition ${
+                                isCurrent
+                                  ? 'bg-yellow-400/20 text-yellow-300 font-bold border border-yellow-400/30'
+                                  : 'hover:bg-white/10 text-white border border-transparent'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                {track.albumArt ? (
+                                  <img
+                                    src={track.albumArt}
+                                    alt={track.title}
+                                    className="w-9 h-9 rounded-lg object-cover shadow border border-white/15 flex-shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-9 h-9 rounded-lg bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
+                                    <Music className="w-4 h-4" />
+                                  </div>
+                                )}
+                                <div className="min-w-0 text-left">
+                                  <div className="font-extrabold truncate text-white">{track.title}</div>
+                                  <div className="text-[10px] text-blue-200/80 truncate">{track.artist}</div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                {track.genre && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-cyan-200 border border-white/10">
+                                    {track.genre}
+                                  </span>
+                                )}
+                                <span className="text-[10px] font-black px-2.5 py-1 rounded-lg bg-yellow-400 text-slate-950 shadow-glow-yellow flex items-center gap-1">
+                                  <span>Escolher</span>
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 
-                    <div className="flex-1 min-w-0 text-left space-y-2">
-                      <div>
-                        <h3 className="font-extrabold text-white text-base truncate">
-                          {selectedTrack.title}
-                        </h3>
-                        <p className="text-xs text-blue-200/90 font-medium truncate">
-                          {selectedTrack.artist}
-                        </p>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        <button
-                          onClick={togglePlayTrack}
-                          className="w-8 h-8 rounded-full bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center transition shadow-glow-yellow flex-shrink-0"
-                        >
-                          {isPlayingPreview ? (
-                            <Pause className="w-4 h-4 fill-current" />
-                          ) : (
-                            <Play className="w-4 h-4 fill-current ml-0.5" />
-                          )}
-                        </button>
-
-                        <div className="flex-1 flex items-center gap-2">
-                          <div className="h-2 flex-1 rounded-full bg-white/20 overflow-hidden relative">
-                            <div
-                              className="h-full bg-yellow-400 rounded-full transition-all duration-300"
-                              style={{ width: isPlayingPreview ? '65%' : '0%' }}
-                            />
-                          </div>
-                          <span className="text-[10px] font-mono font-bold text-blue-200/90">
-                            {isPlayingPreview ? 'Tocando' : '0:30 prévia'}
-                          </span>
+                    {/* Sugestões Rápidas quando nenhuma busca foi digitada e nenhuma faixa foi selecionada */}
+                    {!selectedTrack && searchResults.length === 0 && (
+                      <div className="p-4 rounded-2xl bg-white/5 border border-white/10 text-left space-y-2">
+                        <div className="text-[11px] font-bold text-yellow-300 flex items-center gap-1">
+                          <Music className="w-3.5 h-3.5" />
+                          <span>Sugestões Populares para a Sala:</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            'Evidências',
+                            'Billie Jean',
+                            'Blinding Lights',
+                            'Bohemian Rhapsody',
+                            'Baile de Favela',
+                            'Shape of You',
+                            'Cheia de Manias',
+                            'Levitating',
+                            'Deixa Acontecer',
+                          ].map((sug) => (
+                            <button
+                              key={sug}
+                              type="button"
+                              onClick={() => {
+                                setSearchQuery(sug);
+                                const socket = getSocket();
+                                socket.emit('search_tracks', { query: sug }, (res: any) => {
+                                  if (res && res.success && res.results && res.results.length > 0) {
+                                    handleSelectTrack(res.results[0]);
+                                  }
+                                });
+                              }}
+                              className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-yellow-400/20 text-white hover:text-yellow-300 text-[11px] font-semibold transition border border-white/10 hover:border-yellow-400/40"
+                            >
+                              + {sug}
+                            </button>
+                          ))}
                         </div>
                       </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-6 rounded-2xl bg-white/5 border border-dashed border-white/20 text-center space-y-2 overflow-hidden backdrop-blur-md">
-                    <Music className="w-8 h-8 text-cyan-300/60 mx-auto" />
-                    <p className="text-xs font-bold text-white">Nenhuma música selecionada</p>
-                    <p className="text-[11px] text-blue-200/70">
-                      Pesquise por nome, artista ou cole o link acima para escolher sua música secreta!
-                    </p>
+                    )}
+
+                    {selectedTrack ? (
+                      <>
+                        {/* Componente de Gráfico Sonoro exibido após a escolha da música */}
+                        <AudioWaveformScrubber
+                          selectedTrack={selectedTrack}
+                          startTimeSeconds={startTimeSeconds}
+                          maxDurationSeconds={trackDuration > 0 ? trackDuration : 180}
+                          onChangeStartTime={handleStartTimeChange}
+                          isPlaying={isPlayingPreview}
+                          onTogglePlay={togglePlayPreview}
+                          currentPlaybackTime={previewCurrentTime}
+                        />
+
+                        {/* Botão de Avanço para a Aba de Previsão */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveSelectionTab('PREDICTION')}
+                          className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-yellow-400 via-amber-400 to-amber-500 hover:brightness-110 text-slate-950 font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2"
+                        >
+                          <span>Ir para Previsão do Dono (Apostas)</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 )}
 
-                {/* Opções de Videoclipe e Tempo Inicial de Reprodução */}
-                <div className="p-3 rounded-2xl bg-white/10 border border-white/15 space-y-2.5 text-left backdrop-blur-md">
-                  {/* Flag do Videoclipe */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Film className="w-4 h-4 text-pink-400 animate-pulse" />
-                      <div>
-                        <div className="text-xs font-extrabold text-white">Exibir Videoclipe / Vídeo</div>
-                        <div className="text-[10px] text-blue-200/70 font-medium">Mostrar o clipe de vídeo para a sala nos palpites</div>
-                      </div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={isVideo}
-                      onChange={(e) => setIsVideo(e.target.checked)}
-                      className="w-4 h-4 accent-pink-500 rounded cursor-pointer"
-                    />
-                  </div>
+                {/* CONTEÚDO DA ABA 2: PREVISÃO DO DONO (ÁREA DEDICADA) */}
+                {activeSelectionTab === 'PREDICTION' && (
+                  <div className="space-y-4 text-left">
+                    <div className="p-4 rounded-2xl bg-white/10 border border-white/15 space-y-3 backdrop-blur-md">
+                      <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
+                        <Star className="w-4 h-4 fill-current text-yellow-400" />
+                        <span>Previsão do Dono: Como a sala vai reagir à sua música?</span>
+                      </label>
 
-                  {/* Ponto Específico de Início (Minutos : Segundos) */}
-                  <div className="pt-2 border-t border-white/10 flex items-center justify-between">
-                    <div className="text-xs font-bold text-yellow-300 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-yellow-300" />
-                      <span>Iniciar em (Tempo Específico):</span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min={0}
-                          max={59}
-                          value={startMinutes}
-                          onChange={(e) => {
-                            const m = Math.max(0, parseInt(e.target.value, 10) || 0);
-                            setStartMinutes(m);
-                            setStartTimeSeconds(m * 60 + startSecs);
-                          }}
-                          className="w-12 px-1.5 py-1 rounded-xl bg-slate-950 border border-white/20 text-white font-mono font-bold text-center text-xs"
-                        />
-                        <span className="text-[10px] text-white font-bold">m</span>
-                      </div>
-                      <span className="text-white font-bold">:</span>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min={0}
-                          max={59}
-                          value={startSecs}
-                          onChange={(e) => {
-                            const s = Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0));
-                            setStartSecs(s);
-                            setStartTimeSeconds(startMinutes * 60 + s);
-                          }}
-                          className="w-12 px-1.5 py-1 rounded-xl bg-slate-950 border border-white/20 text-white font-mono font-bold text-center text-xs"
-                        />
-                        <span className="text-[10px] text-white font-bold">s</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Previsão do Dono durante a escolha da música */}
-                <div className="text-left space-y-2 border-t border-white/10 pt-3 relative z-30">
-                  <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
-                    <span>🎯 Previsão do Dono: Como a sala vai reagir à sua música?</span>
-                  </label>
-
-                  {/* Seletor de Tipo de Previsão */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {[
-                      { kind: 'PLAYER_COUNT', label: 'Quantidade Exata', sub: '3.0x retorno' },
-                      { kind: 'MORE_THAN', label: 'Mais de X Jogadores', sub: '2.5x retorno' },
-                      { kind: 'FEWER_THAN', label: 'Menos de X Jogadores', sub: '2.5x retorno' },
-                      { kind: 'SPECIFIC_PLAYERS', label: 'Jogador(es) Específico(s)', sub: '3.5x retorno' },
-                      { kind: 'NONE', label: 'Nenhum Jogador (0)', sub: '4.0x retorno' },
-                    ].map((opt) => (
-                      <button
-                        key={opt.kind}
-                        type="button"
-                        onClick={() => setOwnerPredictionKind(opt.kind as SecondaryPredictionKind)}
-                        className={`p-2 rounded-2xl border text-left transition-all ${
-                          ownerPredictionKind === opt.kind
-                            ? 'bg-yellow-400 text-slate-950 border-yellow-300 font-extrabold shadow-glow-yellow'
-                            : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
-                        }`}
-                      >
-                        <div className="text-xs font-extrabold">{opt.label}</div>
-                        <div className={`text-[10px] ${ownerPredictionKind === opt.kind ? 'text-slate-900 font-bold' : 'text-cyan-300'}`}>
-                          {opt.sub}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Se escolher Quantidade Exata / Mais de X / Menos de X */}
-                  {(ownerPredictionKind === 'PLAYER_COUNT' || ownerPredictionKind === 'MORE_THAN' || ownerPredictionKind === 'FEWER_THAN') && (
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-xs font-bold text-blue-200">
-                        {ownerPredictionKind === 'PLAYER_COUNT'
-                          ? 'Quantos jogadores vão acertar?'
-                          : ownerPredictionKind === 'MORE_THAN'
-                          ? 'Mais do que quantos jogadores?'
-                          : 'Menos do que quantos jogadores?'}
-                      </span>
-                      <div className="flex gap-1.5">
-                        {Array.from({ length: room.players.length }).map((_, idx) => (
+                      {/* Seletor de Tipo de Previsão */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {[
+                          { kind: 'PLAYER_COUNT', label: 'Quantidade Exata', sub: '3.0x retorno' },
+                          { kind: 'MORE_THAN', label: 'Mais de X Jogadores', sub: '2.5x retorno' },
+                          { kind: 'FEWER_THAN', label: 'Menos de X Jogadores', sub: '2.5x retorno' },
+                          { kind: 'SPECIFIC_PLAYERS', label: 'Jogador(es) Específico(s)', sub: '3.5x retorno' },
+                          { kind: 'NONE', label: 'Nenhum Jogador (0)', sub: '4.0x retorno' },
+                        ].map((opt) => (
                           <button
-                            key={idx}
+                            key={opt.kind}
                             type="button"
-                            onClick={() => setExpectedCount(idx)}
-                            className={`w-7 h-7 rounded-xl font-extrabold text-xs border transition ${
-                              expectedCount === idx
-                                ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
-                                : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                            onClick={() => setOwnerPredictionKind(opt.kind as SecondaryPredictionKind)}
+                            className={`p-2.5 rounded-2xl border text-left transition-all ${
+                              ownerPredictionKind === opt.kind
+                                ? 'bg-yellow-400 text-slate-950 border-yellow-300 font-extrabold shadow-glow-yellow'
+                                : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
                             }`}
                           >
-                            {idx}
+                            <div className="text-xs font-extrabold">{opt.label}</div>
+                            <div className={`text-[10px] ${ownerPredictionKind === opt.kind ? 'text-slate-900 font-bold' : 'text-cyan-300'}`}>
+                              {opt.sub}
+                            </div>
                           </button>
                         ))}
                       </div>
-                    </div>
-                  )}
 
-                  {/* Se escolher Jogadores Específicos (SPECIFIC_PLAYERS) */}
-                  {ownerPredictionKind === 'SPECIFIC_PLAYERS' && (
-                    <div className="space-y-1.5 pt-1">
-                      <span className="text-xs font-bold text-blue-200">Quem vai acertar sua música?</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {room.players
-                          .filter((p) => p.id !== myPlayerId)
-                          .map((p) => {
-                            const isSelected = selectedTargetPlayerIds.includes(p.id);
-                            return (
+                      {/* Se escolher Quantidade Exata / Mais de X / Menos de X */}
+                      {(ownerPredictionKind === 'PLAYER_COUNT' || ownerPredictionKind === 'MORE_THAN' || ownerPredictionKind === 'FEWER_THAN') && (
+                        <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                          <span className="text-xs font-bold text-blue-200">
+                            {ownerPredictionKind === 'PLAYER_COUNT'
+                              ? 'Quantos jogadores vão acertar?'
+                              : ownerPredictionKind === 'MORE_THAN'
+                              ? 'Mais do que quantos jogadores?'
+                              : 'Menos do que quantos jogadores?'}
+                          </span>
+                          <div className="flex gap-1.5">
+                            {Array.from({ length: room.players.length }).map((_, idx) => (
                               <button
-                                key={p.id}
+                                key={idx}
                                 type="button"
-                                onClick={() =>
-                                  setSelectedTargetPlayerIds((prev) =>
-                                    prev.includes(p.id) ? prev.filter((id) => id !== p.id) : [...prev, p.id]
-                                  )
-                                }
-                                className={`px-2.5 py-1 rounded-xl border text-xs font-extrabold flex items-center gap-1 transition ${
-                                  isSelected
+                                onClick={() => setExpectedCount(idx)}
+                                className={`w-8 h-8 rounded-xl font-extrabold text-xs border transition ${
+                                  expectedCount === idx
                                     ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
                                     : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
                                 }`}
                               >
-                                <span>{p.nickname}</span>
-                                {isSelected && <span>✓</span>}
+                                {idx}
                               </button>
-                            );
-                          })}
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Se escolher Jogadores Específicos (SPECIFIC_PLAYERS) */}
+                      {ownerPredictionKind === 'SPECIFIC_PLAYERS' && (
+                        <div className="space-y-2 pt-2 border-t border-white/10">
+                          <span className="text-xs font-bold text-blue-200">Quem vai acertar sua música?</span>
+                          <div className="flex flex-wrap gap-2">
+                            {room.players
+                              .filter((p) => p.id !== myPlayerId)
+                              .map((p) => {
+                                const isSelected = selectedTargetPlayerIds.includes(p.id);
+                                return (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    onClick={() => {
+                                      if (isSelected) {
+                                        setSelectedTargetPlayerIds(selectedTargetPlayerIds.filter((id) => id !== p.id));
+                                      } else {
+                                        setSelectedTargetPlayerIds([...selectedTargetPlayerIds, p.id]);
+                                      }
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold transition flex items-center gap-1.5 ${
+                                      isSelected
+                                        ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
+                                        : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                    }`}
+                                  >
+                                    <span>{p.nickname}</span>
+                                    {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                                  </button>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Fichas para Apostar */}
+                      <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                        <span className="text-xs font-extrabold text-white flex items-center gap-1">
+                          <Coins className="w-4 h-4 text-yellow-300" /> Fichas para apostar:
+                        </span>
+                        <div className="flex gap-1.5">
+                          {[50, 100, 200, 500].map((amt) => (
+                            <button
+                              key={amt}
+                              type="button"
+                              onClick={() => setOwnerChipBet(amt)}
+                              className={`px-3 py-1 rounded-xl text-xs font-extrabold border transition ${
+                                ownerChipBet === amt
+                                  ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
+                                  : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                              }`}
+                            >
+                              +{amt}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  )}
 
-                  {/* Seleção de Fichas do Dono */}
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-xs font-bold text-blue-200">Fichas para apostar:</span>
-                    <div className="flex gap-1.5">
-                      {[50, 100, 200, 500].map((amt) => (
-                        <button
-                          key={amt}
-                          type="button"
-                          onClick={() => setOwnerChipBet(amt)}
-                          className={`px-2.5 py-1 rounded-xl text-xs font-black border transition ${
-                            ownerChipBet === amt
-                              ? 'bg-yellow-400 text-slate-950 border-yellow-300 shadow-glow-yellow'
-                              : 'bg-white/10 hover:bg-white/20 border-white/20 text-white'
-                          }`}
-                        >
-                          +{amt}
-                        </button>
-                      ))}
-                    </div>
+                    {/* Botão de Confirmação Final */}
+                    <button
+                      disabled={!selectedTrack || confirmedChoice}
+                      onClick={handleConfirmChoice}
+                      className={`w-full py-4 rounded-2xl font-black text-sm transition-all shadow-xl flex items-center justify-center gap-2 ${
+                        confirmedChoice
+                          ? 'bg-emerald-500 text-white cursor-not-allowed'
+                          : !selectedTrack
+                          ? 'bg-white/10 text-white/40 cursor-not-allowed border border-white/10'
+                          : 'bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-500 hover:brightness-110 text-slate-950 shadow-glow-yellow active:scale-[0.99]'
+                      }`}
+                    >
+                      {confirmedChoice ? (
+                        <>
+                          <CheckCircle2 className="w-5 h-5" />
+                          <span>Música e Previsão Confirmadas!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-5 h-5 stroke-[3]" />
+                          <span>Confirmar Música & Previsão</span>
+                        </>
+                      )}
+                    </button>
                   </div>
-                </div>
-              </>
+                )}
+              </div>
             )}
 
             {/* FASE 3: BETTING (Palpites e Apostas na Mesma Tela) */}
             {room.phase === 'BETTING' && (
               <div className="space-y-4 flex-1 flex flex-col justify-between custom-scrollbar overflow-y-auto pr-1">
-                {/* 1. Track Anônima em Destaque (Vídeo ou Áudio) */}
-                {room.currentTrack?.isVideo || room.currentTrack?.youtubeId || extractYouTubeId(room.currentTrack?.audioUrl) ? (
-                  <div className="w-full rounded-2xl overflow-hidden shadow-xl border border-pink-400/40 bg-slate-950 flex flex-col items-center">
-                    <div className="w-full aspect-video">
-                      <iframe
-                        src={`https://www.youtube.com/embed/${room.currentTrack?.youtubeId || extractYouTubeId(room.currentTrack?.audioUrl)}?start=${room.currentTrack?.startTimeSeconds || 0}&autoplay=1&controls=1`}
-                        title={room.currentTrack?.title || 'Vídeo Secreto'}
-                        className="w-full h-full border-0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    </div>
-                    <div className="p-2.5 w-full bg-slate-900/90 text-left flex items-center justify-between">
-                      <span className="text-xs font-bold text-white truncate">
-                        🎬 {room.currentTrack?.title} — {room.currentTrack?.artist}
-                      </span>
-                      {room.currentTrack?.startTimeSeconds ? (
-                        <span className="text-[10px] font-mono text-yellow-300 font-extrabold flex items-center gap-1">
-                          <Clock className="w-3 h-3" /> Início: {room.currentTrack.startTimeSeconds}s
-                        </span>
-                      ) : null}
-                    </div>
+                {/* 1. Track Anônima em Destaque com Áudio Oficial */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-600/40 via-pink-600/40 to-rose-600/40 border border-pink-400/40 flex items-center gap-4 shadow-xl backdrop-blur-md">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 flex items-center justify-center shadow-lg border border-pink-300/40 flex-shrink-0">
+                    <Music className="w-7 h-7 text-white animate-pulse" />
                   </div>
-                ) : (
-                  <div className="p-3.5 rounded-2xl bg-gradient-to-r from-purple-600/40 via-pink-600/40 to-rose-600/40 border border-pink-400/40 flex items-center gap-4 shadow-xl backdrop-blur-md">
-                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 flex items-center justify-center shadow-lg border border-pink-300/40 flex-shrink-0">
-                      <Music className="w-6 h-6 text-white animate-pulse" />
-                    </div>
 
-                    <div className="flex-1 min-w-0 text-left space-y-1">
+                  <div className="flex-1 min-w-0 text-left space-y-1">
+                    <div className="flex items-center justify-between">
                       <h3 className="font-extrabold text-white text-sm truncate">
                         Música Secreta da Rodada #{room.currentRound}
                       </h3>
-                      <p className="text-xs text-yellow-300 font-bold truncate">
-                        {room.currentTrack?.title || 'Faixa Misteriosa'} — {room.currentTrack?.artist || 'Artista Secreto'}
-                      </p>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-400/20 text-yellow-300 font-mono font-bold border border-yellow-400/30">
+                        {room.currentTrack?.genre || 'Faixa Secreta'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-yellow-300 font-bold truncate">
+                      {room.currentTrack?.title || 'Faixa Misteriosa'} — {room.currentTrack?.artist || 'Artista Secreto'}
+                    </p>
 
-                      <div className="flex items-center gap-3 pt-0.5">
-                        <button
-                          onClick={togglePlayTrack}
-                          className="w-7 h-7 rounded-full bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center transition shadow-glow-yellow flex-shrink-0"
-                        >
-                          {isPlayingPreview ? (
-                            <Pause className="w-3.5 h-3.5 fill-current" />
-                          ) : (
-                            <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-                          )}
-                        </button>
-                        <div className="flex-1 flex items-center gap-2">
-                          <div className="h-1.5 flex-1 rounded-full bg-white/20 overflow-hidden relative">
-                            <div
-                              className="h-full bg-yellow-400 rounded-full transition-all duration-300"
-                              style={{ width: isPlayingPreview ? '65%' : '0%' }}
-                            />
-                          </div>
-                          <span className="text-[10px] font-mono font-bold text-blue-200/90">
-                            {room.currentTrack?.startTimeSeconds ? `Começa aos ${room.currentTrack.startTimeSeconds}s` : '0:30 prévia'}
-                          </span>
+                    <div className="flex items-center gap-3 pt-1">
+                      <button
+                        onClick={togglePlayRoundAudio}
+                        className="w-9 h-9 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center transition shadow-glow-yellow flex-shrink-0 active:scale-95"
+                        title={isPlayingRound ? 'Pausar áudio da rodada' : 'Ouvir faixa secreta'}
+                      >
+                        {isPlayingRound ? (
+                          <Pause className="w-4 h-4 fill-current" />
+                        ) : (
+                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                        )}
+                      </button>
+                      <div className="flex-1 flex items-center gap-2">
+                        <div className="h-2 flex-1 rounded-full bg-white/20 overflow-hidden relative">
+                          <div
+                            className="h-full bg-gradient-to-r from-yellow-400 to-amber-400 rounded-full transition-all duration-150"
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.max(0, Math.round((roundCurrentTime / Math.max(1, roundDuration)) * 100))
+                              )}%`,
+                            }}
+                          />
                         </div>
+                        <span className="text-[10px] font-mono font-bold text-blue-200/90">
+                          {formatTime(roundCurrentTime)} / {formatTime(roundDuration)}
+                        </span>
                       </div>
                     </div>
                   </div>
-                )}
+                </div>
 
                 {/* 2. Seleção do Dono da Música */}
                 <div className="text-left space-y-2">
                   <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
-                    <span>🎯 1. Clique no jogador que você acha ser o Dono:</span>
+                    <span>1. Clique no jogador que você acha ser o Dono:</span>
                   </label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {room.players.map((p) => {
@@ -867,8 +1082,9 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                             {p.nickname} {p.id === myPlayerId && '(Você)'}
                           </span>
                           {isSelected && (
-                            <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-slate-950 text-yellow-300 font-extrabold">
-                              PALPITE ✓
+                            <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-slate-950 text-yellow-300 font-extrabold inline-flex items-center gap-0.5">
+                              <span>PALPITE</span>
+                              <Check className="w-2.5 h-2.5 stroke-[3]" />
                             </span>
                           )}
                         </button>
@@ -954,30 +1170,10 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
               </div>
             )}
           </div>
-
-          {/* Ação Principal: Botão verde em largura total durante seu turno */}
-          {room.phase === 'MUSIC_SELECTION' && isMyTurn && (
-            <div className="pt-3 text-center space-y-1.5 relative z-10 flex-shrink-0">
-              <button
-                onClick={handleConfirmChoice}
-                disabled={!selectedTrack}
-                className={`w-full py-3.5 rounded-2xl font-black text-base transition-all flex items-center justify-center gap-2 shadow-xl border-2 overflow-hidden ${
-                  !selectedTrack
-                    ? 'bg-slate-800/80 border-slate-700 text-slate-400 cursor-not-allowed'
-                    : confirmedChoice
-                    ? 'bg-emerald-600 border-emerald-300 text-white shadow-glow-cyan'
-                    : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950 shadow-glow-green hover:scale-[1.01] cursor-pointer'
-                }`}
-              >
-                <Check className="w-5 h-5 stroke-[3]" />
-                <span>{confirmedChoice ? 'Escolha Confirmada!' : 'Confirmar Escolha'}</span>
-              </button>
-            </div>
-          )}
         </div>
 
         {/* 4. PAINEL DIREITO: Chat Real (col-span-3) */}
-        <div className="lg:col-span-3 glass-card p-4 rounded-3xl border border-white/15 flex flex-col justify-between backdrop-blur-md overflow-hidden bg-slate-900/40 h-full">
+        <div className="lg:col-span-3 glass-card p-4 rounded-3xl border border-white/15 flex flex-col justify-between backdrop-blur-md overflow-hidden bg-slate-900/40 lg:h-full min-h-[350px]">
           <div className="flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -1000,7 +1196,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                         className="p-2.5 rounded-2xl bg-cyan-500/15 border border-cyan-400/30 text-left space-y-0.5 overflow-hidden backdrop-blur-md"
                       >
                         <div className="text-[11px] font-extrabold text-cyan-300 flex items-center gap-1">
-                          <span>🤖</span>
+                          <Bot className="w-3.5 h-3.5 inline text-cyan-300" />
                           <span>{msg.senderName}</span>
                         </div>
                         <div className="text-xs text-cyan-100/90 font-medium leading-tight">{msg.text}</div>
@@ -1041,14 +1237,14 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
 
           <div className="pt-2 space-y-2 border-t border-white/10 flex-shrink-0">
             {/* Barra de Reações Rápida */}
-            <div className="flex items-center justify-between px-1">
-              {DEFAULT_EMOJIS.map((emoji) => (
+            <div className="flex items-center justify-between gap-1 px-1">
+              {['Bravos', 'Sensacional', 'Genial'].map((label) => (
                 <button
-                  key={emoji}
-                  onClick={() => handleSendEmoji(emoji)}
-                  className="p-1 hover:scale-125 transition text-base"
+                  key={label}
+                  onClick={() => handleSendEmoji(`[${label}]`)}
+                  className="px-2 py-1 rounded-xl bg-white/10 hover:bg-white/20 text-[10px] font-extrabold text-white transition border border-white/15"
                 >
-                  {emoji}
+                  {label}
                 </button>
               ))}
             </div>
@@ -1057,7 +1253,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
             <form onSubmit={handleSendChat} className="flex gap-2">
               <input
                 type="text"
-                placeholder="Conte quem vai errar feio 🎤"
+                placeholder="Conte quem vai errar feio..."
                 value={chatText}
                 onChange={(e) => setChatText(e.target.value)}
                 className="flex-1 px-3 py-2 rounded-xl bg-white/10 border border-white/20 text-white placeholder-blue-200/50 text-xs focus:outline-none focus:border-emerald-400 transition"
@@ -1078,7 +1274,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
       <footer className="w-full glass-card p-3 rounded-3xl border border-white/15 flex items-center justify-between mt-3 bg-slate-900/60 overflow-hidden backdrop-blur-md flex-shrink-0">
         {/* Controles Principais */}
         <div className="flex items-center gap-3">
-          {/* Botão verde: ✓ Pronto! (Exibido apenas em LOBBY para não-hosts) */}
+          {/* Botão verde: Pronto! (Exibido apenas em LOBBY para não-hosts) */}
           {room.phase === 'LOBBY' && !isHost && (
             <button
               onClick={handleToggleReady}
@@ -1093,7 +1289,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
             </button>
           )}
 
-          {/* Botão azul: 🎲 Randomizar Música */}
+          {/* Botão azul: Randomizar Música */}
           {room.phase === 'MUSIC_SELECTION' && (
             <button
               onClick={handleRandomizeTrack}
@@ -1104,7 +1300,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
             </button>
           )}
 
-          {/* Botão magenta: 🚀 Iniciar Partida (Host / Líder) */}
+          {/* Botão magenta: Iniciar Partida (Host / Líder) */}
           {isHost && room.phase === 'LOBBY' && (
             <button
               onClick={onStartGame}

@@ -19,8 +19,6 @@ import { AVATAR_LIBRARY } from '@/lib/avatars';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 import { X, Headphones, LogIn, Sparkles } from 'lucide-react';
 
-const AVATARS = ['🎧', '🎤', '🎸', '🥁', '🎷', '👑', '🧙‍♂️', '⚡'];
-
 export default function Home() {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [myPlayerId, setMyPlayerId] = useState<string>('');
@@ -325,7 +323,7 @@ export default function Home() {
                 type="submit"
                 className="w-full py-4 rounded-xl bg-gradient-button-yellow font-black text-slate-950 text-lg shadow-glow-yellow hover:scale-[1.01] transition"
               >
-                CRIAR SALA 🚀
+                CRIAR SALA
               </button>
             </form>
           </div>
@@ -423,7 +421,7 @@ export default function Home() {
                 type="submit"
                 className="w-full py-4 rounded-xl bg-gradient-button-cyan font-black text-slate-950 text-lg shadow-glow-cyan hover:scale-[1.01] transition"
               >
-                ENTRAR NA SALA 🎵
+                ENTRAR NA SALA
               </button>
             </form>
           </div>

@@ -212,7 +212,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = ({
             onClick={handleConfirmTrack}
             className="px-6 py-3 rounded-xl bg-gradient-button-yellow font-black text-slate-950 text-base shadow-glow-yellow hover:scale-[1.03] transition"
           >
-            CONFIRMAR MÚSICA 🚀
+            CONFIRMAR MÚSICA
           </button>
         </div>
       )}

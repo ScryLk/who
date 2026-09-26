@@ -5,6 +5,10 @@ export const metadata: Metadata = {
   title: 'Who? - The Ultimate Music Guessing & Betting Party Game',
   description:
     'Jogo casual multiplayer de música, percepção social e apostas entre amigos inspirados em Stopots e Gartic.',
+  icons: {
+    icon: '/icon.svg',
+    shortcut: '/icon.svg',
+  },
 };
 
 export default function RootLayout({

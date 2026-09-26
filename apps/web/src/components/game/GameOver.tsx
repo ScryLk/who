@@ -32,7 +32,8 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
       {/* Header Title matching Image 3 */}
       <header className="w-full text-center py-4">
         <h1 className="text-4xl md:text-6xl font-black tracking-tight drop-shadow-md flex items-center justify-center gap-3">
-          Resultado Final 🎉
+          <Trophy className="w-10 h-10 md:w-14 md:h-14 text-yellow-300 animate-bounce" />
+          <span>Resultado Final</span>
         </h1>
         <p className="text-blue-100 text-sm font-semibold mt-1">
           Confira quem mandou bem no ritmo!
@@ -118,7 +119,7 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
         {/* Destaques Especiais 2x2 Grid matching Image 3 */}
         <div className="max-w-3xl mx-auto space-y-3">
           <h3 className="text-center font-extrabold text-lg text-yellow-300 flex items-center justify-center gap-2">
-            <Sparkles className="w-5 h-5" /> Destaques Especiais ⭐️
+            <Sparkles className="w-5 h-5" /> Destaques Especiais
           </h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -162,7 +163,7 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
           className="w-full py-4 rounded-2xl bg-gradient-button-yellow font-black text-slate-950 text-xl shadow-glow-yellow hover:scale-105 transition flex items-center justify-center gap-2"
         >
           <RotateCcw className="w-6 h-6" />
-          <span>Jogar Novamente 🔁</span>
+          <span>Jogar Novamente</span>
         </button>
 
         <div className="flex gap-3">
@@ -174,7 +175,7 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
             className="flex-1 py-3 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs border border-white/20 transition flex items-center justify-center gap-2"
           >
             <Share2 className="w-4 h-4 text-cyan-300" />
-            <span>Compartilhar Resultado 📲</span>
+            <span>Compartilhar Resultado</span>
           </button>
 
           <button
@@ -182,7 +183,7 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
             className="flex-1 py-3 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs border border-white/20 transition flex items-center justify-center gap-2"
           >
             <Home className="w-4 h-4 text-yellow-300" />
-            <span>Voltar ao Menu Principal 🏠</span>
+            <span>Voltar ao Menu Principal</span>
           </button>
         </div>
       </footer>

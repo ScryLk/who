@@ -5,11 +5,11 @@ import { Trophy, Crown, Disc, Radio } from 'lucide-react';
 
 export const HallOfFameSection: React.FC = () => {
   const leaderboard = [
-    { rank: 1, name: 'MusicMaster2024', title: 'Rei/Rainha da Música 👑', points: '15,847' },
-    { rank: 2, name: 'BeatHunter', title: 'Caçador de Beats 🎯', points: '12,356' },
-    { rank: 3, name: 'SoundWizard', title: 'Mago do Som 🧙‍♂️', points: '9,847' },
-    { rank: 4, name: 'MelodyMaster', title: 'Mestre da Melodia 🎵', points: '8,234' },
-    { rank: 5, name: 'RhythmRocker', title: 'Lenda do Ritmo 🎸', points: '7,891' },
+    { rank: 1, name: 'MusicMaster2024', title: 'Rei/Rainha da Música', points: '15,847' },
+    { rank: 2, name: 'BeatHunter', title: 'Caçador de Beats', points: '12,356' },
+    { rank: 3, name: 'SoundWizard', title: 'Mago do Som', points: '9,847' },
+    { rank: 4, name: 'MelodyMaster', title: 'Mestre da Melodia', points: '8,234' },
+    { rank: 5, name: 'RhythmRocker', title: 'Lenda do Ritmo', points: '7,891' },
   ];
 
   return (

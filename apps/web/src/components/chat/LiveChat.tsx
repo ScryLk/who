@@ -11,7 +11,7 @@ interface LiveChatProps {
   chatMessages: ChatMessage[];
 }
 
-const EMOJIS = ['🔥', '🤣', '😱', '🎧', '👑', '👏', '🎶', '💯'];
+const REACTION_LABELS = ['Bravos', 'Sensacional', 'Mestre', 'Genial'];
 
 export const LiveChat: React.FC<LiveChatProps> = ({
   roomCode,
@@ -162,15 +162,15 @@ export const LiveChat: React.FC<LiveChatProps> = ({
           </div>
 
           {/* Quick Reaction Bar */}
-          <div className="p-2 border-t border-white/10 flex justify-between bg-slate-950/40">
-            {EMOJIS.map((emoji) => (
+          <div className="p-2 border-t border-white/10 flex justify-between gap-1 bg-slate-950/40">
+            {REACTION_LABELS.map((label) => (
               <button
-                key={emoji}
-                onClick={() => handleSendEmoji(emoji)}
-                className="p-1.5 hover:scale-125 transition text-lg"
-                title={`Reagir ${emoji}`}
+                key={label}
+                onClick={() => handleSendEmoji(`[${label}]`)}
+                className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-extrabold text-white transition border border-white/15"
+                title={`Reagir ${label}`}
               >
-                {emoji}
+                {label}
               </button>
             ))}
           </div>

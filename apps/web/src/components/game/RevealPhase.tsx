@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Player, RoomState, RoundResult } from '@who/shared';
-import { Crown, Trophy, Sparkles, Disc, Music, ArrowRight, MessageSquare } from 'lucide-react';
+import { Crown, Trophy, Sparkles, Disc, Music, ArrowRight, MessageSquare, Check } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 
@@ -13,7 +13,7 @@ interface RevealPhaseProps {
   onNextRound: () => void;
 }
 
-const EMOJIS = ['🎉', '😂', '❤️', '😯'];
+const REACTION_LABELS = ['Bravos', 'Sensacional', 'Mestre', 'Genial'];
 
 export const RevealPhase: React.FC<RevealPhaseProps> = ({
   room,
@@ -44,12 +44,12 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
     return () => clearInterval(timer);
   }, [isHost, onNextRound]);
 
-  const handleSendReaction = (emoji: string) => {
+  const handleSendReaction = (label: string) => {
     const socket = getSocket();
     const myPlayer = room.players.find((p) => p.id === myPlayerId);
     socket.emit('send_reaction', {
       roomCode: room.code,
-      emoji,
+      emoji: `[${label}]`,
       senderName: myPlayer?.nickname || 'Jogador',
     });
   };
@@ -59,8 +59,8 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
       {/* Header Title matching Image 2 */}
       <header className="w-full text-center py-4">
         <h1 className="text-4xl md:text-5xl font-black tracking-tight drop-shadow-md flex items-center justify-center gap-3">
-          E quem escolheu foi...
-          <span className="inline-flex gap-1 text-2xl">🎵 💿 🎧</span>
+          <Disc className="w-10 h-10 text-yellow-300 animate-spin" />
+          <span>E quem escolheu foi...</span>
         </h1>
       </header>
 
@@ -92,8 +92,9 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
                   {result?.track.title || 'Blinding Lights'}
                 </h3>
                 <p className="text-xs text-cyan-200">{result?.track.artist || 'The Weeknd'}</p>
-                <span className="text-[11px] font-semibold text-yellow-300 block mt-1">
-                  🎵 Essa era a escolha secreta de {ownerPlayer?.nickname}!
+                <span className="text-[11px] font-semibold text-yellow-300 block mt-1 flex items-center gap-1">
+                  <Music className="w-3.5 h-3.5 inline" />
+                  <span>Essa era a escolha secreta de {ownerPlayer?.nickname}!</span>
                 </span>
               </div>
             </div>
@@ -107,7 +108,7 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
 
             <div className="flex flex-wrap items-center justify-center gap-6">
               {result?.guesserBetResults.filter((r) => r.correctOwner).length === 0 ? (
-                <p className="text-xs text-cyan-100 italic">Ninguém acertou nesta rodada! 😱</p>
+                <p className="text-xs text-cyan-100 italic">Ninguém acertou nesta rodada!</p>
               ) : (
                 result?.guesserBetResults
                   .filter((r) => r.correctOwner)
@@ -118,7 +119,7 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
                         <div className="relative">
                           <PlayerAvatar avatar={p?.avatar} size="md" className="border-2 border-emerald-400 bg-white/20" />
                           <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-emerald-400 text-slate-950 text-xs font-bold flex items-center justify-center">
-                            ✓
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
                           </span>
                         </div>
                         <span className="text-xs font-bold text-white mt-1">{p?.nickname}</span>
@@ -175,15 +176,15 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
 
       {/* Bottom Bar matching Image 2 */}
       <footer className="w-full max-w-6xl mx-auto mt-6 flex items-center justify-between">
-        {/* Reaction Emojis Left */}
+        {/* Reaction Labels Left */}
         <div className="flex items-center gap-2">
-          {EMOJIS.map((emoji) => (
+          {REACTION_LABELS.map((label) => (
             <button
-              key={emoji}
-              onClick={() => handleSendReaction(emoji)}
-              className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/30 text-xl flex items-center justify-center transition hover:scale-125"
+              key={label}
+              onClick={() => handleSendReaction(label)}
+              className="px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/30 text-xs font-extrabold text-white transition hover:scale-105 border border-white/20"
             >
-              {emoji}
+              {label}
             </button>
           ))}
         </div>
@@ -194,7 +195,8 @@ export const RevealPhase: React.FC<RevealPhaseProps> = ({
             onClick={onNextRound}
             className="px-8 py-4 rounded-2xl bg-gradient-button-green text-slate-950 font-black text-base shadow-glow-cyan hover:scale-105 transition flex items-center gap-2"
           >
-            <span>Iniciando em {countdown}s — Próxima Rodada 🚀</span>
+            <span>Iniciando em {countdown}s — Próxima Rodada</span>
+            <ArrowRight className="w-5 h-5" />
           </button>
         ) : (
           <div className="px-6 py-3 rounded-2xl bg-white/10 text-cyan-100 text-xs font-bold animate-pulse">

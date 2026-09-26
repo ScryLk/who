@@ -98,6 +98,13 @@ export interface ChatMessage {
   isSystem?: boolean;
 }
 
+export interface RoomOptions {
+  turnDurationSeconds?: number;
+  bettingDurationSeconds?: number;
+  startingChips?: number;
+  genreFilter?: 'all' | 'pop' | 'rock' | 'funk' | 'mpb' | 'international' | 'video_only';
+}
+
 export interface RoomState {
   code: string;
   hostId: string;
@@ -117,6 +124,7 @@ export interface RoomState {
   ownerBet?: OwnerBet;
   lastRoundResult?: RoundResult;
   chatMessages: ChatMessage[];
+  options?: RoomOptions;
 }
 
 export interface OddsInfo {
