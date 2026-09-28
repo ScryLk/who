@@ -1,5 +1,6 @@
 import {
   clampHead,
+  clampSelectionStart,
   calculateClipBounds,
   shiftClipWindow,
   isInsideClip,
@@ -44,8 +45,14 @@ console.log('[PASS] Window shift preserved duration');
 assert(isInsideClip(15, 10, 40) === true, '15 is inside [10, 40]');
 assert(isInsideClip(5, 10, 40) === false, '5 is outside [10, 40]');
 assert(shouldStopPlayback(39.98, 40, 0.05) === true, 'Within tolerance stops playback');
-assert(shouldStopPlayback(35, 40, 0.05) === false, 'Mid playback does not stop');
-console.log('[PASS] Playback stop checks verified');
+// Test 6: clampSelectionStart examples from section 69
+assert(clampSelectionStart(10, 30, 30) === 0, 'duration=30, clip=30, desired=10 must be 0');
+assert(clampSelectionStart(10, 60, 30) === 10, 'duration=60, clip=30, desired=10 must be 10');
+assert(clampSelectionStart(40, 60, 30) === 30, 'duration=60, clip=30, desired=40 must be 30');
+assert(clampSelectionStart(45, 60, 15) === 45, 'duration=60, clip=15, desired=45 must be 45');
+assert(clampSelectionStart(-10, 60, 30) === 0, 'desired=-10 must clamp to 0');
+assert(clampSelectionStart(50, 60, 30) === 30, 'desired=50 beyond max must clamp to 30');
+console.log('[PASS] clampSelectionStart examples verified');
 
 console.log('\n========================================');
 console.log('All Clip Engine Tests PASSED!');

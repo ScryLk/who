@@ -33,6 +33,14 @@ export const submitTrackSchema = z.object({
     albumArt: z.string().optional(),
     audioUrl: z.string(),
     genre: z.string().optional(),
+    provider: z.enum(['preview', 'youtube']).optional(),
+    durationSeconds: z.number().optional(),
+    videoId: z.string().optional(),
+    channelTitle: z.string().optional(),
+    startTimeSeconds: z.number().optional(),
+    endTimeSeconds: z.number().optional(),
+    isVideo: z.boolean().optional(),
+    youtubeId: z.string().optional(),
   }),
 });
 

@@ -45,6 +45,8 @@ export type SecondaryPredictionKind =
   | 'FEWER_THAN'
   | 'NONE';
 
+export type MusicProvider = 'preview' | 'youtube';
+
 export interface Track {
   id: string;
   title: string;
@@ -53,10 +55,14 @@ export interface Track {
   audioUrl: string;
   genre?: string;
   submittedByPlayerId: string;
-  isVideo?: boolean;
-  youtubeId?: string;
+  provider?: MusicProvider;
+  durationSeconds?: number;
+  videoId?: string;
+  channelTitle?: string;
   startTimeSeconds?: number;
   endTimeSeconds?: number;
+  isVideo?: boolean;
+  youtubeId?: string;
 }
 
 export interface Player {

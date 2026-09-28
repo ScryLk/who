@@ -1,3 +1,9 @@
+try {
+  process.loadEnvFile?.();
+} catch (e) {
+  // Ignore missing .env file
+}
+
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';

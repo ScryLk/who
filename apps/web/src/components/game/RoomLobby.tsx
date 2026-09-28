@@ -37,6 +37,9 @@ import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 import { BackgroundMusic } from '@/components/common/BackgroundMusic';
 import { CountdownModal } from '@/components/game/CountdownModal';
 import { AudioWaveformScrubber } from '@/components/game/AudioWaveformScrubber';
+import { YouTubeClipSelector } from '@/components/game/YouTubeClipSelector';
+import { YouTubeRoundPlayer } from '@/components/game/YouTubeRoundPlayer';
+import { formatDurationDisplay } from '@who/shared';
 import { BetRiskIndicator } from '@/components/game/BetRiskIndicator';
 import { BetRevealStepper } from '@/components/game/BetRevealStepper';
 import { OwnerRevealSequence } from '@/components/game/OwnerRevealSequence';
@@ -123,6 +126,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   const [selectedTrack, setSelectedTrack] = useState<any | null>(null);
   const [startTimeSeconds, setStartTimeSeconds] = useState(0);
   const [activeSelectionTab, setActiveSelectionTab] = useState<'MUSIC' | 'PREDICTION'>('MUSIC');
+  const [isAudioReady, setIsAudioReady] = useState(false);
 
   // Preview Audio Engine (Music Selection)
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -293,27 +297,6 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     socket.emit('set_ready', { roomCode: room.code, isReady: newReady });
   };
 
-  // Live debounced search as user types
-  useEffect(() => {
-    const trimmed = searchQuery.trim();
-    if (!trimmed) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      setIsSearching(true);
-      const socket = getSocket();
-      socket.emit('search_tracks', { query: trimmed }, (res: any) => {
-        setIsSearching(false);
-        if (res && res.success && res.results) {
-          setSearchResults(res.results);
-        }
-      });
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = searchQuery.trim();
@@ -329,6 +312,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   };
 
   const handleSelectTrack = (track: any) => {
+    setIsAudioReady(false);
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       previewAudioRef.current = null;
@@ -343,12 +327,6 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
 
   const handleStartTimeChange = (sec: number) => {
     setStartTimeSeconds(sec);
-    if (previewAudioRef.current) {
-      try {
-        previewAudioRef.current.currentTime = sec;
-        setPreviewCurrentTime(sec);
-      } catch (e) {}
-    }
   };
 
   // Preview Audio Player with strict clip bounding
@@ -909,8 +887,26 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                                       </div>
                                     )}
                                     <div className="min-w-0 text-left">
-                                      <div className="font-extrabold truncate text-white">{track.title}</div>
-                                      <div className="text-[10px] text-blue-200/80 truncate">{track.artist}</div>
+                                      <div className="font-extrabold truncate text-white flex items-center gap-1.5">
+                                        <span className="truncate">{track.title}</span>
+                                        {track.provider === 'youtube' || track.isVideo ? (
+                                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 font-bold border border-red-500/30 flex-shrink-0">
+                                            YouTube
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30 flex-shrink-0">
+                                            Preview
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[10px] text-blue-200/80 truncate flex items-center gap-2">
+                                        <span>{track.artist}</span>
+                                        {track.durationSeconds && (
+                                          <span className="text-slate-400 font-mono">
+                                            ({formatDurationDisplay(track.durationSeconds)})
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-yellow-400 text-slate-950 flex items-center gap-1">
@@ -953,26 +949,46 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                           </div>
                         )}
 
-                        {/* Audio Waveform Scrubber Component */}
+                        {/* Music Selector Component: YouTube Full-Track vs Waveform Scrubber */}
                         {selectedTrack && (
                           <div className="space-y-3">
-                            <AudioWaveformScrubber
-                              selectedTrack={selectedTrack}
-                              startTimeSeconds={startTimeSeconds}
-                              maxDurationSeconds={trackDuration > 0 ? trackDuration : 30}
-                              windowDurationSeconds={clipDuration}
-                              onChangeStartTime={handleStartTimeChange}
-                              isPlaying={isPlayingPreview}
-                              onTogglePlay={togglePlayPreview}
-                              currentPlaybackTime={previewCurrentTime}
-                            />
+                            {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
+                              <YouTubeClipSelector
+                                selectedTrack={selectedTrack}
+                                startTimeSeconds={startTimeSeconds}
+                                windowDurationSeconds={clipDuration}
+                                onChangeStartTime={handleStartTimeChange}
+                                onReady={(duration) => {
+                                  setIsAudioReady(true);
+                                  setTrackDuration(duration);
+                                }}
+                              />
+                            ) : (
+                              <AudioWaveformScrubber
+                                selectedTrack={selectedTrack}
+                                startTimeSeconds={startTimeSeconds}
+                                windowDurationSeconds={clipDuration}
+                                onChangeStartTime={handleStartTimeChange}
+                                onReady={(duration) => {
+                                  setIsAudioReady(true);
+                                  setTrackDuration(duration);
+                                }}
+                              />
+                            )}
 
                             <button
                               type="button"
+                              disabled={!isAudioReady}
                               onClick={() => setActiveSelectionTab('PREDICTION')}
-                              className="w-full py-3 rounded-2xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2"
+                              className={`w-full py-3 rounded-2xl font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2 ${
+                                !isAudioReady
+                                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                                  : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 active:scale-95'
+                              }`}
                             >
-                              <span>Avançar para Previsão do Dono</span>
+                              <span>
+                                {!isAudioReady ? 'Carregando prévia...' : 'Avançar para Previsão do Dono'}
+                              </span>
                               <ArrowRight className="w-4 h-4" />
                             </button>
                           </div>
@@ -1127,65 +1143,73 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
             {/* BETTING PHASE — THE CORE GAMEPLAY ARENA */}
             {room.phase === 'BETTING' && (
               <div className="flex-1 flex flex-col justify-between py-1 space-y-3">
-                {/* Turntable Vinyl Mystery Player */}
-                <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-900/60 via-pink-900/40 to-slate-900/60 border border-pink-400/30 flex flex-col sm:flex-row items-center gap-4 shadow-xl backdrop-blur-md">
-                  {/* Spinning Vinyl Record Disc */}
-                  <div className="relative flex-shrink-0 flex items-center justify-center">
-                    <div
-                      className={`w-20 h-20 md:w-24 md:h-24 rounded-full bg-slate-950 border-4 border-slate-800 flex items-center justify-center shadow-2xl relative ${
-                        isPlayingRound ? 'animate-spin-slow ring-4 ring-pink-500/40' : ''
-                      }`}
-                    >
-                      {/* Vinyl Grooves pattern */}
-                      <div className="w-16 h-16 rounded-full border border-white/10 flex items-center justify-center">
-                        <div className="w-12 h-12 rounded-full border border-white/15 flex items-center justify-center bg-gradient-to-tr from-pink-600 to-rose-500">
-                          <Music className="w-6 h-6 text-white" />
+                {/* Round Player: YouTube Official vs Vinyl Turntable Mystery Player */}
+                {room.currentTrack && (room.currentTrack.provider === 'youtube' || room.currentTrack.isVideo) ? (
+                  <YouTubeRoundPlayer
+                    track={room.currentTrack}
+                    roundNumber={room.currentRound}
+                    clipDurationSeconds={clipDuration}
+                  />
+                ) : (
+                  <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-900/60 via-pink-900/40 to-slate-900/60 border border-pink-400/30 flex flex-col sm:flex-row items-center gap-4 shadow-xl backdrop-blur-md">
+                    {/* Spinning Vinyl Record Disc */}
+                    <div className="relative flex-shrink-0 flex items-center justify-center">
+                      <div
+                        className={`w-20 h-20 md:w-24 md:h-24 rounded-full bg-slate-950 border-4 border-slate-800 flex items-center justify-center shadow-2xl relative ${
+                          isPlayingRound ? 'animate-spin-slow ring-4 ring-pink-500/40' : ''
+                        }`}
+                      >
+                        {/* Vinyl Grooves pattern */}
+                        <div className="w-16 h-16 rounded-full border border-white/10 flex items-center justify-center">
+                          <div className="w-12 h-12 rounded-full border border-white/15 flex items-center justify-center bg-gradient-to-tr from-pink-600 to-rose-500">
+                            <Music className="w-6 h-6 text-white" />
+                          </div>
                         </div>
                       </div>
+
+                      {/* Overlay Play/Pause Button */}
+                      <button
+                        onClick={togglePlayRoundAudio}
+                        className="absolute inset-0 m-auto w-10 h-10 rounded-full bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center shadow-glow-yellow transition active:scale-95 z-20"
+                        title={isPlayingRound ? 'Pausar trecho' : 'Ouvir trecho'}
+                      >
+                        {isPlayingRound ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+                      </button>
                     </div>
 
-                    {/* Overlay Play/Pause Button */}
-                    <button
-                      onClick={togglePlayRoundAudio}
-                      className="absolute inset-0 m-auto w-10 h-10 rounded-full bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center shadow-glow-yellow transition active:scale-95 z-20"
-                      title={isPlayingRound ? 'Pausar trecho' : 'Ouvir trecho'}
-                    >
-                      {isPlayingRound ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
-                    </button>
-                  </div>
-
-                  {/* Track Meta & Clip Timeline */}
-                  <div className="flex-1 min-w-0 text-left w-full space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-pink-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <Radio className="w-3.5 h-3.5 animate-pulse" />
-                        <span>Faixa Secreta da Rodada #{room.currentRound}</span>
-                      </span>
-                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-300 font-mono font-bold border border-yellow-400/30">
-                        Clip de {clipDuration}s
-                      </span>
-                    </div>
-
-                    <div className="text-sm md:text-base font-extrabold text-white truncate">
-                      {room.currentTrack?.title || 'Faixa Misteriosa'} — <span className="text-yellow-300">{room.currentTrack?.artist || 'Artista Oculto'}</span>
-                    </div>
-
-                    {/* Progress Bar of the Clip */}
-                    <div className="flex items-center gap-3 pt-1">
-                      <div className="h-2 flex-1 rounded-full bg-white/10 overflow-hidden relative border border-white/10">
-                        <div
-                          className="h-full bg-gradient-to-r from-yellow-400 to-amber-400 rounded-full transition-all duration-150"
-                          style={{
-                            width: `${Math.min(100, Math.max(0, (activeClipTime / Math.max(1, clipDuration)) * 100))}%`,
-                          }}
-                        />
+                    {/* Track Meta & Clip Timeline */}
+                    <div className="flex-1 min-w-0 text-left w-full space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-pink-300 uppercase tracking-wider flex items-center gap-1.5">
+                          <Radio className="w-3.5 h-3.5 animate-pulse" />
+                          <span>Faixa Secreta da Rodada #{room.currentRound}</span>
+                        </span>
+                        <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-300 font-mono font-bold border border-yellow-400/30">
+                          Clip de {clipDuration}s
+                        </span>
                       </div>
-                      <span className="text-[11px] font-mono font-bold text-blue-200">
-                        {formatTime(activeClipTime)} / {formatTime(clipDuration)}
-                      </span>
+
+                      <div className="text-sm md:text-base font-extrabold text-white truncate">
+                        {room.currentTrack?.title || 'Faixa Misteriosa'} — <span className="text-yellow-300">{room.currentTrack?.artist || 'Artista Oculto'}</span>
+                      </div>
+
+                      {/* Progress Bar of the Clip */}
+                      <div className="flex items-center gap-3 pt-1">
+                        <div className="h-2 flex-1 rounded-full bg-white/10 overflow-hidden relative border border-white/10">
+                          <div
+                            className="h-full bg-gradient-to-r from-yellow-400 to-amber-400 rounded-full transition-all duration-150"
+                            style={{
+                              width: `${Math.min(100, Math.max(0, (activeClipTime / Math.max(1, clipDuration)) * 100))}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-mono font-bold text-blue-200">
+                          {formatTime(activeClipTime)} / {formatTime(clipDuration)}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Suspects Grid: Seated Players to Deduce */}
                 <div className="space-y-2 flex-1">

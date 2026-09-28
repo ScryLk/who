@@ -23,6 +23,19 @@ export function clampHead(
 }
 
 /**
+ * Centralized clamp function for selection window start position:
+ * maxStart = max(0, audioDuration - clipDuration)
+ * return min(max(desiredStart, 0), maxStart)
+ */
+export function clampSelectionStart(
+  desiredStart: number,
+  audioDuration: number,
+  clipDuration: number
+): number {
+  return clampHead(desiredStart, clipDuration, audioDuration);
+}
+
+/**
  * Calculates guaranteed valid clip boundaries obeying:
  * 0 <= HEAD < TAIL <= totalDuration (when totalDuration > 0)
  * TAIL - HEAD === min(clipDuration, totalDuration)
