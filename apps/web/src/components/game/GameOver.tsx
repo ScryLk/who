@@ -2,16 +2,17 @@
 
 import React, { useEffect } from 'react';
 import { Player, RoomState } from '@who/shared';
-import { Trophy, RotateCcw, Home, Share2, Crown, Sparkles, Target, Laugh, Music, Search } from 'lucide-react';
+import { Trophy, RotateCcw, Home, Share2, Crown, Sparkles, Target, Laugh, Music, Search, LogOut } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 
 interface GameOverProps {
   room: RoomState;
   onPlayAgain: () => void;
+  onLeaveRoom: () => void;
 }
 
-export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
+export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain, onLeaveRoom }) => {
   const sortedPlayers = [...room.players].sort((a, b) => b.chips - a.chips);
 
   const firstPlace = sortedPlayers[0];
@@ -28,9 +29,30 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
   }, []);
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-indigo-900 via-purple-800 to-amber-500 text-white p-4 md:p-8 flex flex-col justify-between font-outfit">
+    <div className="min-h-screen w-full bg-gradient-to-br from-indigo-900 via-purple-800 to-amber-500 text-white p-4 md:p-8 flex flex-col justify-between font-outfit overflow-y-auto">
+      {/* Top Navigation Bar with Persistent Leave Button */}
+      <div className="w-full max-w-5xl mx-auto flex items-center justify-between py-2 mb-2 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xl md:text-2xl font-black tracking-tight text-white drop-shadow">
+            WHO<span className="text-yellow-400">?</span>
+          </span>
+          <span className="text-xs px-2.5 py-1 rounded-full bg-white/10 border border-white/20 text-blue-200 font-mono font-bold">
+            #{room.code}
+          </span>
+        </div>
+
+        <button
+          onClick={onLeaveRoom}
+          className="px-4 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-200 hover:text-white font-bold text-xs flex items-center gap-2 transition shadow-md cursor-pointer active:scale-95"
+          title="Sair da Sala e Voltar ao Início"
+        >
+          <LogOut className="w-4 h-4 text-red-400" />
+          <span>Sair para o Menu</span>
+        </button>
+      </div>
+
       {/* Header Title matching Image 3 */}
-      <header className="w-full text-center py-4">
+      <header className="w-full text-center py-2 md:py-4">
         <h1 className="text-4xl md:text-6xl font-black tracking-tight drop-shadow-md flex items-center justify-center gap-3">
           <Trophy className="w-10 h-10 md:w-14 md:h-14 text-yellow-300 animate-bounce" />
           <span>Resultado Final</span>
@@ -179,10 +201,10 @@ export const GameOver: React.FC<GameOverProps> = ({ room, onPlayAgain }) => {
           </button>
 
           <button
-            onClick={() => window.location.reload()}
-            className="flex-1 py-3 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs border border-white/20 transition flex items-center justify-center gap-2"
+            onClick={onLeaveRoom}
+            className="flex-1 py-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-white font-bold text-xs border border-red-500/40 transition flex items-center justify-center gap-2 cursor-pointer"
           >
-            <Home className="w-4 h-4 text-yellow-300" />
+            <LogOut className="w-4 h-4 text-red-400" />
             <span>Voltar ao Menu Principal</span>
           </button>
         </div>

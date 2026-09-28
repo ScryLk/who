@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Play, Pause, Youtube, Radio, Volume2 } from 'lucide-react';
+import { Play, Pause, Youtube, Radio } from 'lucide-react';
 import type { Track } from '@who/shared';
 import { formatDurationDisplay } from '@who/shared';
 import { loadYouTubeIFrameAPI, type YTPlayer } from '@/lib/youtubeLoader';
@@ -22,10 +22,15 @@ export const YouTubeRoundPlayer: React.FC<YouTubeRoundPlayerProps> = ({
 
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState<number>(track.startTimeSeconds || 0);
 
-  const startSec = track.startTimeSeconds || 0;
-  const endSec = track.endTimeSeconds || startSec + clipDurationSeconds;
+  // Authoritative start and end seconds
+  const startSec = Math.max(0, track.startTimeSeconds || 0);
+  const endSec = track.endTimeSeconds && track.endTimeSeconds > startSec
+    ? track.endTimeSeconds
+    : startSec + clipDurationSeconds;
+
+  const [currentTime, setCurrentTime] = useState<number>(startSec);
+
   const videoId =
     track.videoId ||
     track.youtubeId ||
@@ -57,6 +62,7 @@ export const YouTubeRoundPlayer: React.FC<YouTubeRoundPlayerProps> = ({
             modestbranding: 1,
             rel: 0,
             playsinline: 1,
+            start: Math.floor(startSec),
             origin: typeof window !== 'undefined' ? window.location.origin : undefined,
           },
           events: {
@@ -66,15 +72,30 @@ export const YouTubeRoundPlayer: React.FC<YouTubeRoundPlayerProps> = ({
               setIsPlayerReady(true);
               try {
                 event.target.seekTo(startSec, true);
+                setCurrentTime(startSec);
               } catch (e) {}
             },
             onStateChange: (event) => {
-              if (!isMounted) return;
-              if (window.YT && event.data === window.YT.PlayerState.PAUSED) {
+              if (!isMounted || !window.YT) return;
+
+              if (event.data === window.YT.PlayerState.PLAYING) {
+                setIsPlaying(true);
+                // Verify initial offset is within valid clip window
+                try {
+                  const t = event.target.getCurrentTime();
+                  if (t < startSec - 1 || t >= endSec) {
+                    event.target.seekTo(startSec, true);
+                    setCurrentTime(startSec);
+                  }
+                } catch (err) {}
+              } else if (event.data === window.YT.PlayerState.PAUSED) {
                 setIsPlaying(false);
-              } else if (window.YT && event.data === window.YT.PlayerState.ENDED) {
+              } else if (event.data === window.YT.PlayerState.ENDED) {
                 setIsPlaying(false);
                 setCurrentTime(startSec);
+                try {
+                  event.target.seekTo(startSec, true);
+                } catch (e) {}
               }
             },
           },
@@ -107,14 +128,14 @@ export const YouTubeRoundPlayer: React.FC<YouTubeRoundPlayerProps> = ({
         const time = player.getCurrentTime();
         setCurrentTime(time);
 
-        if (time >= endSec) {
+        if (time >= endSec || (time < startSec - 1 && isPlaying)) {
           player.pauseVideo();
           player.seekTo(startSec, true);
           setIsPlaying(false);
           setCurrentTime(startSec);
         }
       } catch (e) {}
-    }, 80);
+    }, 60);
 
     return () => clearInterval(interval);
   }, [isPlaying, startSec, endSec]);
@@ -140,12 +161,12 @@ export const YouTubeRoundPlayer: React.FC<YouTubeRoundPlayerProps> = ({
   return (
     <div className="p-4 rounded-3xl bg-gradient-to-r from-red-950/40 via-purple-950/40 to-slate-900/60 border border-red-500/30 flex flex-col md:flex-row items-center gap-4 shadow-xl backdrop-blur-md">
       {/* Video Container (Legitimate, visible player) */}
-      <div className="relative w-full md:w-56 aspect-video flex-shrink-0 rounded-2xl overflow-hidden bg-black/80 border border-red-500/30 shadow-lg">
+      <div className="relative w-full md:w-64 aspect-video flex-shrink-0 rounded-2xl overflow-hidden bg-black/80 border border-red-500/30 shadow-lg">
         <div ref={containerRef} className="w-full h-full" />
         {!isPlayerReady && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-slate-950/90 text-slate-400">
             <div className="w-5 h-5 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-[10px] font-mono">Carregando clipe...</span>
+            <span className="text-[10px] font-mono">Carregando trecho da rodada...</span>
           </div>
         )}
       </div>
@@ -163,7 +184,7 @@ export const YouTubeRoundPlayer: React.FC<YouTubeRoundPlayerProps> = ({
               <span>YouTube</span>
             </span>
             <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-300 font-mono font-bold border border-yellow-400/30">
-              Clip de {clipDurationSeconds}s
+              Clip de {clipDurationSeconds}s ({formatDurationDisplay(startSec)} a {formatDurationDisplay(endSec)})
             </span>
           </div>
         </div>

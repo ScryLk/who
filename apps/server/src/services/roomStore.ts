@@ -184,6 +184,59 @@ class RoomStore {
     return { room };
   }
 
+  leaveRoom(code: string, playerId: string): { room?: RoomState; deleted?: boolean; error?: string } {
+    const room = this.getRoom(code);
+    if (!room) {
+      return { error: 'Sala não encontrada!' };
+    }
+
+    const pIndex = room.players.findIndex((p) => p.id === playerId);
+    if (pIndex === -1) {
+      return { error: 'Jogador não encontrado na sala!' };
+    }
+
+    const player = room.players[pIndex];
+    room.players.splice(pIndex, 1);
+
+    if (room.guesserBets) {
+      delete room.guesserBets[playerId];
+    }
+
+    const remainingHumans = room.players.filter((p) => !p.isBot);
+
+    // If no human players remain in the room, clean up and delete the room completely
+    if (remainingHumans.length === 0) {
+      this.rooms.delete(code.toUpperCase());
+      redisRoomStore.deleteRoom(code).catch(() => {});
+      return { deleted: true };
+    }
+
+    // If leaving player was the host, migrate to next human
+    if (room.hostId === playerId) {
+      const newHost = remainingHumans[0];
+      room.hostId = newHost.id;
+      newHost.isHost = true;
+      this.addChatMessage(
+        room.code,
+        'SYSTEM',
+        'WHO Bot',
+        `${player.nickname} saiu da sala. ${newHost.nickname} agora é o líder.`,
+        true
+      );
+    } else {
+      this.addChatMessage(
+        room.code,
+        'SYSTEM',
+        'WHO Bot',
+        `${player.nickname} saiu da sala.`,
+        true
+      );
+    }
+
+    redisRoomStore.saveRoom(room).catch(() => {});
+    return { room };
+  }
+
   setPlayerReady(code: string, playerId: string, isReady: boolean): RoomState | undefined {
     const room = this.getRoom(code);
     if (!room) return undefined;
@@ -249,7 +302,9 @@ class RoomStore {
     room.phase = 'MUSIC_SELECTION';
     room.turnIndex = 0;
     room.currentTurnPlayerId = room.players[0]?.id;
-    room.turnTimeRemainingSeconds = 50;
+    const durationSec = room.options?.turnDurationSeconds || room.settings?.musicSelectionDurationSeconds || 90;
+    room.turnTimeRemainingSeconds = durationSec;
+    room.selectionDeadlineAt = Date.now() + durationSec * 1000;
 
     const activePlayer = room.players[0];
     if (activePlayer) {
@@ -290,9 +345,60 @@ class RoomStore {
       audioUrl: chosen.audioUrl,
       genre: chosen.genre,
       startTimeSeconds: 0,
+      durationSeconds: 30,
+      provider: 'preview',
     };
 
     return this.submitTrack(code, currentTurnPlayer.id, botTrack);
+  }
+
+  handleTurnTimeout(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room || room.phase !== 'MUSIC_SELECTION') return undefined;
+
+    const currentTurnPlayer = room.players.find((p) => p.id === room.currentTurnPlayerId);
+    if (!currentTurnPlayer) return this.advanceTurn(code);
+
+    // 1. If player already selected a track, auto-confirm it!
+    if (currentTurnPlayer.selectedTrack) {
+      this.addChatMessage(
+        room.code,
+        'SYSTEM',
+        'WHO Bot',
+        `Tempo esgotado! A seleção de ${currentTurnPlayer.nickname} foi confirmada automaticamente.`,
+        true
+      );
+      return this.submitTrack(code, currentTurnPlayer.id, currentTurnPlayer.selectedTrack);
+    }
+
+    // 2. Otherwise pick a fallback track from FEATURED_CATALOG
+    const submittedTitles = new Set(room.submittedTracks.map((t) => t.title.toLowerCase()));
+    const available = FEATURED_CATALOG.filter((t) => !submittedTitles.has(t.title.toLowerCase()));
+    const chosen = available.length > 0
+      ? available[Math.floor(Math.random() * available.length)]
+      : FEATURED_CATALOG[Math.floor(Math.random() * FEATURED_CATALOG.length)];
+
+    const fallbackTrack: Omit<Track, 'submittedByPlayerId'> = {
+      id: `timeout-track-${currentTurnPlayer.id}-${Date.now()}`,
+      title: chosen.title,
+      artist: chosen.artist,
+      albumArt: chosen.albumArt,
+      audioUrl: chosen.audioUrl,
+      genre: chosen.genre,
+      durationSeconds: 30,
+      provider: 'preview',
+      startTimeSeconds: 0,
+    };
+
+    this.addChatMessage(
+      room.code,
+      'SYSTEM',
+      'WHO Bot',
+      `Tempo esgotado! Uma faixa foi selecionada automaticamente para ${currentTurnPlayer.nickname}.`,
+      true
+    );
+
+    return this.submitTrack(code, currentTurnPlayer.id, fallbackTrack);
   }
 
   advanceTurn(code: string): RoomState | undefined {
@@ -305,7 +411,9 @@ class RoomStore {
       room.turnIndex = nextIndex;
       const nextPlayer = room.players[nextIndex];
       room.currentTurnPlayerId = nextPlayer.id;
-      room.turnTimeRemainingSeconds = 50;
+      const durationSec = room.options?.turnDurationSeconds || room.settings?.musicSelectionDurationSeconds || 90;
+      room.turnTimeRemainingSeconds = durationSec;
+      room.selectionDeadlineAt = Date.now() + durationSec * 1000;
 
       this.addChatMessage(
         room.code,
@@ -320,6 +428,7 @@ class RoomStore {
       }
     } else {
       // All turns completed! Advance to BETTING phase
+      delete room.selectionDeadlineAt;
       this.startBettingRound(code);
     }
 
@@ -337,8 +446,23 @@ class RoomStore {
     const player = room.players.find((p) => p.id === playerId);
     if (!player) return undefined;
 
+    const clipDuration = room.settings?.clipDurationSeconds || 30;
+    let startSec = Math.max(0, trackData.startTimeSeconds || 0);
+
+    // Clamp head if media duration is known
+    if (trackData.durationSeconds && trackData.durationSeconds > 0) {
+      const maxStart = Math.max(0, trackData.durationSeconds - clipDuration);
+      startSec = Math.min(startSec, maxStart);
+    }
+
+    const endSec = startSec + clipDuration;
+    const provider = trackData.provider || (trackData.videoId || trackData.youtubeId ? 'youtube' : 'preview');
+
     const track: Track = {
       ...trackData,
+      provider,
+      startTimeSeconds: startSec,
+      endTimeSeconds: endSec,
       submittedByPlayerId: playerId,
     };
 

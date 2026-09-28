@@ -7,6 +7,7 @@ export interface RoomSettings {
   enableOwnerPrediction: boolean;
   enableVibeCombo: boolean;
   allowBots: boolean;
+  musicSelectionDurationSeconds?: number;
 }
 
 export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
@@ -18,6 +19,7 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   enableOwnerPrediction: true,
   enableVibeCombo: true,
   allowBots: true,
+  musicSelectionDurationSeconds: 90,
 };
 
 export type GamePhase =
@@ -154,6 +156,7 @@ export interface RoomState {
   turnIndex?: number;
   currentTurnPlayerId?: string;
   turnTimeRemainingSeconds?: number;
+  selectionDeadlineAt?: number;
   players: Player[];
   submittedTracks: Track[];
   currentTrack?: Track;

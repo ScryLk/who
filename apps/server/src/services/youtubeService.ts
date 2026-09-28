@@ -1,5 +1,21 @@
-import { parseYouTubeDuration, extractYouTubeVideoId, extractYouTubeStartTime } from '@who/shared';
+import { parseYouTubeDuration } from '@who/shared';
 import type { TrackSearchResult } from './musicService';
+
+export type YouTubeErrorCode =
+  | 'YOUTUBE_KEY_MISSING'
+  | 'YOUTUBE_API_DISABLED'
+  | 'YOUTUBE_FORBIDDEN'
+  | 'YOUTUBE_QUOTA_EXCEEDED'
+  | 'YOUTUBE_NETWORK_ERROR'
+  | 'YOUTUBE_NO_RESULTS'
+  | 'YOUTUBE_INVALID_RESPONSE';
+
+export interface YouTubeSearchResult {
+  success: boolean;
+  tracks: TrackSearchResult[];
+  errorCode?: YouTubeErrorCode;
+  errorMessage?: string;
+}
 
 interface CacheEntry<T> {
   timestamp: number;
@@ -7,7 +23,7 @@ interface CacheEntry<T> {
 }
 
 const CACHE_TTL_MS = 20 * 60 * 1000; // 20 minutes
-const searchCache = new Map<string, CacheEntry<TrackSearchResult[]>>();
+const searchCache = new Map<string, CacheEntry<YouTubeSearchResult>>();
 const videoCache = new Map<string, CacheEntry<TrackSearchResult>>();
 
 function getFromCache<T>(cache: Map<string, CacheEntry<T>>, key: string): T | null {
@@ -21,7 +37,6 @@ function getFromCache<T>(cache: Map<string, CacheEntry<T>>, key: string): T | nu
 }
 
 function setToCache<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T): void {
-  // Prune cache if it gets too large
   if (cache.size > 200) {
     const oldestKey = cache.keys().next().value;
     if (oldestKey) cache.delete(oldestKey);
@@ -36,6 +51,8 @@ export function isYouTubeApiKeyConfigured(): boolean {
 
 /**
  * Fetches video details from YouTube Data API v3 given a single video ID.
+ * Returns null if the video does not exist, is blocked, or API key is not configured.
+ * Does NOT invent 180s duration.
  */
 export async function getYouTubeVideo(videoId: string): Promise<TrackSearchResult | null> {
   if (!videoId) return null;
@@ -49,7 +66,7 @@ export async function getYouTubeVideo(videoId: string): Promise<TrackSearchResul
   }
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${encodeURIComponent(
+    const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status&id=${encodeURIComponent(
       videoId
     )}&key=${apiKey}`;
 
@@ -68,7 +85,14 @@ export async function getYouTubeVideo(videoId: string): Promise<TrackSearchResul
     const item = data.items?.[0];
     if (!item) return null;
 
-    const durationSec = parseYouTubeDuration(item.contentDetails?.duration) || 180;
+    // Check embeddable status if available
+    if (item.status && item.status.embeddable === false) {
+      console.warn(`[YouTubeService] Video ${videoId} is not embeddable.`);
+      return null;
+    }
+
+    const parsedSec = parseYouTubeDuration(item.contentDetails?.duration);
+    const durationSec = parsedSec > 0 ? parsedSec : undefined;
     const thumbnail =
       item.snippet?.thumbnails?.high?.url ||
       item.snippet?.thumbnails?.medium?.url ||
@@ -94,20 +118,23 @@ export async function getYouTubeVideo(videoId: string): Promise<TrackSearchResul
     setToCache(videoCache, videoId, result);
     return result;
   } catch (error) {
-    console.error('[YouTubeService] Network or parsing error fetching video details:', error);
+    console.error('[YouTubeService] Network error fetching video details:', error);
     return null;
   }
 }
 
 /**
- * Searches YouTube videos using YouTube Data API v3 search.list and videos.list for durations.
+ * Searches YouTube videos using YouTube Data API v3 with videoEmbeddable=true.
+ * Returns structured result differentiating success, empty results, and specific API errors.
  */
 export async function searchYouTubeVideos(
   query: string,
   maxResults = 8
-): Promise<TrackSearchResult[]> {
+): Promise<YouTubeSearchResult> {
   const trimmed = query.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return { success: true, tracks: [] };
+  }
 
   const cacheKey = trimmed.toLowerCase();
   const cached = getFromCache(searchCache, cacheKey);
@@ -115,12 +142,17 @@ export async function searchYouTubeVideos(
 
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) {
-    return [];
+    return {
+      success: false,
+      tracks: [],
+      errorCode: 'YOUTUBE_KEY_MISSING',
+      errorMessage: 'Chave da API do YouTube não configurada no servidor',
+    };
   }
 
   try {
-    // 1. Search for video IDs matching the query
-    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=${maxResults}&q=${encodeURIComponent(
+    // 1. Search for embeddable video IDs
+    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=${maxResults}&q=${encodeURIComponent(
       trimmed
     )}&key=${apiKey}`;
 
@@ -128,18 +160,37 @@ export async function searchYouTubeVideos(
     if (!searchRes.ok) {
       const errText = await searchRes.text().catch(() => '');
       if (searchRes.status === 403) {
-        console.warn('[YouTubeService] Quota exceeded or access forbidden during search.list.');
-      } else {
-        console.warn(`[YouTubeService] Search API error (${searchRes.status}): ${errText}`);
+        const isQuota = errText.includes('quotaExceeded') || errText.includes('dailyLimitExceeded');
+        const code: YouTubeErrorCode = isQuota ? 'YOUTUBE_QUOTA_EXCEEDED' : 'YOUTUBE_FORBIDDEN';
+        console.warn(`[YouTubeService] Search API error (${code}): ${errText}`);
+        return {
+          success: false,
+          tracks: [],
+          errorCode: code,
+          errorMessage: isQuota ? 'Cota diária da API do YouTube excedida' : 'Acesso à API do YouTube proibido',
+        };
       }
-      return [];
+
+      console.warn(`[YouTubeService] Search API error (${searchRes.status}): ${errText}`);
+      return {
+        success: false,
+        tracks: [],
+        errorCode: 'YOUTUBE_INVALID_RESPONSE',
+        errorMessage: `Erro na busca do YouTube: status ${searchRes.status}`,
+      };
     }
 
     const searchData = (await searchRes.json()) as any;
     const items = searchData.items || [];
     if (items.length === 0) {
-      setToCache(searchCache, cacheKey, []);
-      return [];
+      const emptyResult: YouTubeSearchResult = {
+        success: true,
+        tracks: [],
+        errorCode: 'YOUTUBE_NO_RESULTS',
+        errorMessage: 'Nenhum vídeo embeddable encontrado no YouTube para esta busca',
+      };
+      setToCache(searchCache, cacheKey, emptyResult);
+      return emptyResult;
     }
 
     const videoIds = items
@@ -147,7 +198,12 @@ export async function searchYouTubeVideos(
       .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
 
     if (videoIds.length === 0) {
-      return [];
+      const emptyResult: YouTubeSearchResult = {
+        success: true,
+        tracks: [],
+        errorCode: 'YOUTUBE_NO_RESULTS',
+      };
+      return emptyResult;
     }
 
     // 2. Fetch contentDetails for duration of each video
@@ -156,46 +212,24 @@ export async function searchYouTubeVideos(
     )}&key=${apiKey}`;
 
     const detailsRes = await fetch(detailsUrl);
-    if (!detailsRes.ok) {
-      console.warn(`[YouTubeService] Videos details API error (${detailsRes.status})`);
-      // Build results with fallback duration if details endpoint fails
-      const fallbackList: TrackSearchResult[] = items.map((item: any) => {
-        const vId = item.id.videoId;
-        return {
-          id: `yt-${vId}`,
-          title: item.snippet?.title || 'Video YouTube',
-          artist: item.snippet?.channelTitle || 'YouTube',
-          albumArt:
-            item.snippet?.thumbnails?.high?.url ||
-            item.snippet?.thumbnails?.medium?.url ||
-            `https://img.youtube.com/vi/${vId}/hqdefault.jpg`,
-          audioUrl: `https://www.youtube.com/watch?v=${vId}`,
-          genre: 'YouTube',
-          provider: 'youtube',
-          durationSeconds: 180,
-          videoId: vId,
-          channelTitle: item.snippet?.channelTitle || 'YouTube',
-          isVideo: true,
-          youtubeId: vId,
-          startTimeSeconds: 0,
-        };
-      });
-      setToCache(searchCache, cacheKey, fallbackList);
-      return fallbackList;
-    }
-
-    const detailsData = (await detailsRes.json()) as any;
-    const detailsItems = detailsData.items || [];
-
     const durationMap = new Map<string, number>();
-    for (const dItem of detailsItems) {
-      const durationSec = parseYouTubeDuration(dItem.contentDetails?.duration);
-      durationMap.set(dItem.id, durationSec);
+
+    if (detailsRes.ok) {
+      const detailsData = (await detailsRes.json()) as any;
+      const detailsItems = detailsData.items || [];
+      for (const dItem of detailsItems) {
+        const durationSec = parseYouTubeDuration(dItem.contentDetails?.duration);
+        if (durationSec > 0) {
+          durationMap.set(dItem.id, durationSec);
+        }
+      }
+    } else {
+      console.warn(`[YouTubeService] Videos details API error (${detailsRes.status})`);
     }
 
     const results: TrackSearchResult[] = items.map((item: any) => {
       const vId = item.id.videoId;
-      const durationSec = durationMap.get(vId) || 180;
+      const durationSec = durationMap.get(vId); // undefined if not recovered, never fake 180
       const thumbnail =
         item.snippet?.thumbnails?.high?.url ||
         item.snippet?.thumbnails?.medium?.url ||
@@ -218,15 +252,24 @@ export async function searchYouTubeVideos(
         startTimeSeconds: 0,
       };
 
-      // Also prime individual videoCache
       setToCache(videoCache, vId, trackItem);
       return trackItem;
     });
 
-    setToCache(searchCache, cacheKey, results);
-    return results;
-  } catch (error) {
+    const successResult: YouTubeSearchResult = {
+      success: true,
+      tracks: results,
+    };
+
+    setToCache(searchCache, cacheKey, successResult);
+    return successResult;
+  } catch (error: any) {
     console.error('[YouTubeService] Search operation failed:', error);
-    return [];
+    return {
+      success: false,
+      tracks: [],
+      errorCode: 'YOUTUBE_NETWORK_ERROR',
+      errorMessage: error?.message || 'Falha de conexão com a API do YouTube',
+    };
   }
 }

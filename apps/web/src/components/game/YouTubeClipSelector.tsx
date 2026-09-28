@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Play, Pause, RotateCcw, Youtube, Volume2, Clock } from 'lucide-react';
+import { Play, Pause, Youtube, Clock, Loader2 } from 'lucide-react';
 import type { Track } from '@who/shared';
 import {
   clampHead,
@@ -32,11 +32,14 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
 
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [isPlayingClip, setIsPlayingClip] = useState(false);
-  const [totalDuration, setTotalDuration] = useState<number>(
+
+  // Total duration: null while unknown, NEVER initialized to fake 180s
+  const [totalDuration, setTotalDuration] = useState<number | null>(
     selectedTrack.durationSeconds && selectedTrack.durationSeconds > 0
       ? selectedTrack.durationSeconds
-      : 180
+      : null
   );
+
   const [playbackTime, setPlaybackTime] = useState<number>(startTimeSeconds);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -47,8 +50,26 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
       ? selectedTrack.audioUrl.split('watch?v=')[1]?.substring(0, 11)
       : '');
 
-  // Calculate current clamped bounds
-  const bounds = calculateClipBounds(startTimeSeconds, windowDurationSeconds, totalDuration);
+  // Reset states and update duration when selected track changes
+  useEffect(() => {
+    const knownDuration =
+      selectedTrack.durationSeconds && selectedTrack.durationSeconds > 0
+        ? selectedTrack.durationSeconds
+        : null;
+
+    setTotalDuration(knownDuration);
+    setIsPlayerReady(false);
+    setIsPlayingClip(false);
+    setPlaybackTime(selectedTrack.startTimeSeconds || 0);
+
+    if (knownDuration && onReady) {
+      onReady(knownDuration);
+    }
+  }, [selectedTrack.id]);
+
+  // Calculate current clamped bounds safely
+  const safeDuration = totalDuration || windowDurationSeconds;
+  const bounds = calculateClipBounds(startTimeSeconds, windowDurationSeconds, safeDuration);
   const head = bounds.head;
   const tail = bounds.tail;
 
@@ -58,9 +79,7 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
     let playerInstance: YTPlayer | null = null;
     const playerContainerId = `yt-player-container-${Math.random().toString(36).substring(2, 9)}`;
 
-    if (!videoId) {
-      return;
-    }
+    if (!videoId) return;
 
     if (containerRef.current) {
       containerRef.current.innerHTML = `<div id="${playerContainerId}" class="w-full h-full rounded-2xl overflow-hidden"></div>`;
@@ -77,6 +96,8 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
             controls: 1,
             modestbranding: 1,
             rel: 0,
+            playsinline: 1,
+            start: Math.floor(head),
             origin: typeof window !== 'undefined' ? window.location.origin : undefined,
           },
           events: {
@@ -85,10 +106,20 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
               playerRef.current = event.target;
               setIsPlayerReady(true);
 
-              const duration = event.target.getDuration();
-              if (duration && duration > 0) {
-                setTotalDuration(duration);
-                if (onReady) onReady(duration);
+              const playerDuration = event.target.getDuration();
+              if (playerDuration && playerDuration > 0) {
+                if (
+                  selectedTrack.durationSeconds &&
+                  Math.abs(playerDuration - selectedTrack.durationSeconds) > 5
+                ) {
+                  console.warn(
+                    `[YouTubeClipSelector] Divergencia de duracao: API=${selectedTrack.durationSeconds}s vs Player=${playerDuration}s`
+                  );
+                }
+                setTotalDuration(playerDuration);
+                if (onReady) onReady(playerDuration);
+              } else if (selectedTrack.durationSeconds && selectedTrack.durationSeconds > 0) {
+                if (onReady) onReady(selectedTrack.durationSeconds);
               }
 
               try {
@@ -96,10 +127,13 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
               } catch (e) {}
             },
             onStateChange: (event) => {
-              if (!isMounted) return;
-              if (window.YT && event.data === window.YT.PlayerState.PAUSED) {
+              if (!isMounted || !window.YT) return;
+
+              if (event.data === window.YT.PlayerState.PLAYING) {
+                setIsPlayingClip(true);
+              } else if (event.data === window.YT.PlayerState.PAUSED) {
                 setIsPlayingClip(false);
-              } else if (window.YT && event.data === window.YT.PlayerState.ENDED) {
+              } else if (event.data === window.YT.PlayerState.ENDED) {
                 setIsPlayingClip(false);
                 setPlaybackTime(head);
               }
@@ -122,7 +156,7 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
     };
   }, [videoId]);
 
-  // Monitor playback boundary when playing clip preview
+  // Monitor playback boundary (HEAD to TAIL) when playing clip preview
   useEffect(() => {
     if (!isPlayingClip) return;
 
@@ -134,20 +168,20 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
         const current = player.getCurrentTime();
         setPlaybackTime(current);
 
-        // Check if exceeded TAIL
-        if (current >= tail) {
+        // If outside window or reached TAIL, pause and rewind to HEAD
+        if (current >= tail || (current < head - 1 && isPlayingClip)) {
           player.pauseVideo();
           player.seekTo(head, true);
           setIsPlayingClip(false);
           setPlaybackTime(head);
         }
       } catch (e) {}
-    }, 80);
+    }, 60);
 
     return () => clearInterval(interval);
   }, [isPlayingClip, head, tail]);
 
-  // Toggle clip preview play / pause
+  // Toggle clip preview play / pause with explicit HEAD seek on play
   const togglePlayClip = useCallback(() => {
     const player = playerRef.current;
     if (!player) return;
@@ -166,6 +200,8 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
   // Shift window by delta seconds (-10, -1, +1, +10)
   const handleShift = useCallback(
     (deltaSeconds: number) => {
+      if (!totalDuration || totalDuration <= 0) return;
+
       const shifted = shiftClipWindow(head, deltaSeconds, windowDurationSeconds, totalDuration);
       onChangeStartTime(shifted.head);
       setPlaybackTime(shifted.head);
@@ -180,10 +216,10 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
     [head, windowDurationSeconds, totalDuration, onChangeStartTime]
   );
 
-  // Position calculation from timeline click / drag
+  // Position calculation from timeline pointer interaction (mouse or touch)
   const handleTimelineInteraction = useCallback(
     (clientX: number) => {
-      if (!timelineRef.current || totalDuration <= 0) return;
+      if (!timelineRef.current || !totalDuration || totalDuration <= 0) return;
 
       const rect = timelineRef.current.getBoundingClientRect();
       const clickRatio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
@@ -203,140 +239,123 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
     [totalDuration, windowDurationSeconds, onChangeStartTime, isPlayingClip]
   );
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (!totalDuration) return;
     setIsDragging(true);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     handleTimelineInteraction(e.clientX);
   };
 
-  useEffect(() => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
+    handleTimelineInteraction(e.clientX);
+  };
 
-    const onMouseMove = (e: MouseEvent) => {
-      handleTimelineInteraction(e.clientX);
-    };
-
-    const onMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [isDragging, handleTimelineInteraction]);
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    try {
+      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch (err) {}
+  };
 
   // Window geometry in percentages
-  const safeTotal = Math.max(1, totalDuration);
-  const windowLeftPct = (head / safeTotal) * 100;
-  const windowWidthPct = ((tail - head) / safeTotal) * 100;
-  const playheadPct = (Math.max(head, Math.min(tail, playbackTime)) / safeTotal) * 100;
+  const safeTotal = totalDuration && totalDuration > 0 ? totalDuration : 1;
+  const windowLeftPct = totalDuration ? (head / safeTotal) * 100 : 0;
+  const windowWidthPct = totalDuration ? ((tail - head) / safeTotal) * 100 : 100;
+  const playheadPct = totalDuration
+    ? (Math.max(head, Math.min(tail, playbackTime)) / safeTotal) * 100
+    : 0;
 
   // Active progress within window
   const activeClipProgress = Math.max(0, Math.min(windowDurationSeconds, playbackTime - head));
 
   return (
-    <div className="w-full bg-slate-900/90 border border-slate-700/60 rounded-3xl p-4 md:p-5 space-y-4 shadow-2xl backdrop-blur-xl">
-      {/* Header Info */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-red-600/20 border border-red-500/40 flex items-center justify-center text-red-400">
-            <Youtube className="w-5 h-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-xs font-bold text-red-400 uppercase tracking-wider flex items-center gap-1.5">
-              <span>Seletor de Trecho Oficial YouTube</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-300 border border-red-500/20">
-                Full-Track
+    <div className="w-full lg:grid lg:grid-cols-12 lg:gap-4 items-center">
+      {/* Coluna 1: YouTube Player Container (Desktop 5 cols / 12) */}
+      <div className="lg:col-span-5 flex flex-col justify-center">
+        <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-black/80 border border-white/15 shadow-xl max-h-[220px] sm:max-h-[240px] xl:max-h-[260px] mx-auto">
+          <div ref={containerRef} className="w-full h-full" />
+          {(!isPlayerReady || totalDuration === null) && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/85 text-slate-400 p-2 text-center">
+              <Loader2 className="w-6 h-6 text-yellow-400 animate-spin" />
+              <span className="text-[11px] font-mono">
+                {!isPlayerReady
+                  ? 'Conectando ao player do YouTube...'
+                  : 'Confirmando duração da faixa...'}
               </span>
             </div>
-            <div className="text-sm font-extrabold text-white truncate max-w-md">
-              {selectedTrack.title}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 self-start sm:self-auto">
-          <span className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-1.5">
-            <Clock className="w-3.5 h-3.5 text-yellow-400" />
-            <span>Total: {formatDurationDisplay(totalDuration)}</span>
-          </span>
-          <span className="text-[11px] font-mono font-black px-2.5 py-1 rounded-lg bg-yellow-400/20 text-yellow-300 border border-yellow-400/40">
-            Janela: {windowDurationSeconds}s
-          </span>
+          )}
         </div>
       </div>
 
-      {/* Embedded YouTube Player Container */}
-      <div className="relative aspect-video w-full max-w-2xl mx-auto rounded-2xl overflow-hidden bg-black/60 border border-slate-800 shadow-inner">
-        <div ref={containerRef} className="w-full h-full" />
-        {!isPlayerReady && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/80 text-slate-400">
-            <div className="w-6 h-6 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs font-mono">Carregando player do YouTube...</span>
-          </div>
-        )}
-      </div>
+      {/* Coluna 2: Clip Editor Controls & Timeline (Desktop 7 cols / 12) */}
+      <div className="lg:col-span-7 flex flex-col justify-center space-y-2.5 pt-3 lg:pt-0">
+        {/* Header da Coluna com Janela e Título */}
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-black uppercase tracking-wider text-yellow-300 flex items-center gap-1.5">
+            <span>Escolha o Trecho</span>
+          </span>
+          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-lg bg-yellow-400/20 text-yellow-300 border border-yellow-400/30">
+            Trecho de {windowDurationSeconds}s
+          </span>
+        </div>
 
-      {/* Timeline Controls & Interactive Track */}
-      <div className="space-y-3 pt-1">
-        {/* Bounds Badges */}
-        <div className="flex items-center justify-between text-xs font-mono font-bold">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">00:00</span>
-            <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              INICIO: {formatDurationDisplay(head)}
+        {/* Destaque Tipográfico HEAD -> TAIL */}
+        <div className="flex items-center justify-between text-xs font-mono font-bold bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+          <div className="flex items-center gap-1.5">
+            <span className="text-emerald-400">Início: {formatDurationDisplay(head)}</span>
+          </div>
+
+          <div className="text-center font-sans font-extrabold text-sm text-yellow-300">
+            {formatDurationDisplay(head)} → {formatDurationDisplay(tail)}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-rose-400">Fim: {formatDurationDisplay(tail)}</span>
+            <span className="text-slate-400 text-[10px]">
+              ({totalDuration !== null ? formatDurationDisplay(totalDuration) : '--:--'})
             </span>
-          </div>
-
-          <div className="text-center font-sans text-xs font-bold text-slate-300">
-            {isPlayingClip ? (
-              <span className="text-yellow-300 font-mono animate-pulse">
-                Tocando: {formatDurationDisplay(activeClipProgress)} / {formatDurationDisplay(windowDurationSeconds)}
-              </span>
-            ) : (
-              <span className="text-slate-400">
-                Trecho de {windowDurationSeconds}s configurado
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
-              FIM: {formatDurationDisplay(tail)}
-            </span>
-            <span className="text-slate-400">{formatDurationDisplay(totalDuration)}</span>
           </div>
         </div>
 
-        {/* Full Track Timeline Bar */}
+        {/* Full Track Interactive Timeline Bar */}
         <div
           ref={timelineRef}
-          onMouseDown={handleMouseDown}
-          className="relative h-10 w-full bg-slate-950 border border-slate-800 rounded-xl cursor-pointer select-none overflow-hidden group shadow-inner"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          className={`relative h-10 w-full bg-slate-950 border border-white/20 rounded-xl select-none overflow-hidden group shadow-inner touch-none ${
+            totalDuration === null ? 'cursor-wait opacity-60' : 'cursor-pointer'
+          }`}
         >
-          {/* Subtle background ruler stripes */}
+          {/* Background ruler stripes */}
           <div className="absolute inset-0 opacity-15 bg-[repeating-linear-gradient(90deg,transparent,transparent_19px,rgba(255,255,255,0.3)_20px)]" />
 
           {/* Draggable Selection Window */}
-          <div
-            className="absolute top-0 bottom-0 bg-yellow-400/25 border-x-2 border-y border-yellow-400 rounded-lg shadow-glow-yellow transition-none pointer-events-none"
-            style={{
-              left: `${windowLeftPct}%`,
-              width: `${windowWidthPct}%`,
-            }}
-          >
-            <div className="w-full h-full flex items-center justify-between px-1.5 text-[9px] font-mono font-black text-yellow-300">
-              <span>HEAD</span>
-              <span>{windowDurationSeconds}s</span>
-              <span>TAIL</span>
+          {totalDuration !== null ? (
+            <div
+              className="absolute top-0 bottom-0 bg-yellow-400/30 border-x-2 border-y border-yellow-400 rounded-lg shadow-glow-yellow transition-none pointer-events-none"
+              style={{
+                left: `${windowLeftPct}%`,
+                width: `${windowWidthPct}%`,
+              }}
+            >
+              <div className="w-full h-full flex items-center justify-between px-2 text-[9px] font-mono font-black text-yellow-300">
+                <span>HEAD</span>
+                <span>{windowDurationSeconds}s</span>
+                <span>TAIL</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-xs font-mono text-slate-500">
+              Calculando escala da timeline...
+            </div>
+          )}
 
           {/* Playhead Marker */}
-          {isPlayingClip && (
+          {isPlayingClip && totalDuration !== null && (
             <div
               className="absolute top-0 bottom-0 w-1 bg-white shadow-glow-white z-20 pointer-events-none"
               style={{ left: `${playheadPct}%` }}
@@ -344,73 +363,73 @@ export const YouTubeClipSelector: React.FC<YouTubeClipSelectorProps> = ({
           )}
         </div>
 
-        {/* Micro-Adjustment Stepper & Test Preview Action */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          {/* Stepper Buttons */}
-          <div className="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+        {/* Micro-Adjustment Stepper & Preview Action */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Nudge Buttons */}
+          <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
             <button
               type="button"
+              disabled={!totalDuration}
               onClick={() => handleShift(-10)}
-              className="px-2.5 py-1 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition active:scale-95"
+              className="px-2 py-0.5 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition active:scale-95 cursor-pointer"
               title="Voltar 10 segundos"
             >
               -10s
             </button>
             <button
               type="button"
+              disabled={!totalDuration}
               onClick={() => handleShift(-1)}
-              className="px-2 py-1 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition active:scale-95"
+              className="px-1.5 py-0.5 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition active:scale-95 cursor-pointer"
               title="Voltar 1 segundo"
             >
               -1s
             </button>
-            <div className="w-px h-4 bg-slate-800" />
+            <div className="w-px h-3.5 bg-white/10" />
             <button
               type="button"
+              disabled={!totalDuration}
               onClick={() => handleShift(1)}
-              className="px-2 py-1 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition active:scale-95"
+              className="px-1.5 py-0.5 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition active:scale-95 cursor-pointer"
               title="Avançar 1 segundo"
             >
               +1s
             </button>
             <button
               type="button"
+              disabled={!totalDuration}
               onClick={() => handleShift(10)}
-              className="px-2.5 py-1 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition active:scale-95"
+              className="px-2 py-0.5 text-xs font-mono font-bold text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition active:scale-95 cursor-pointer"
               title="Avançar 10 segundos"
             >
               +10s
             </button>
           </div>
 
-          {/* Preview Clip Button */}
+          {/* Preview Button */}
           <button
             type="button"
-            disabled={!isPlayerReady}
+            disabled={!isPlayerReady || totalDuration === null}
             onClick={togglePlayClip}
-            className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition active:scale-95 shadow-md ${
+            className={`px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition active:scale-95 shadow cursor-pointer ${
               isPlayingClip
                 ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-glow-yellow'
-                : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700'
+                : 'bg-white/10 hover:bg-white/20 text-slate-100 border border-white/15 disabled:opacity-40 disabled:cursor-not-allowed'
             }`}
           >
             {isPlayingClip ? (
               <>
                 <Pause className="w-3.5 h-3.5 fill-current" />
-                <span>Pausar Trecho</span>
+                <span>Pausar</span>
               </>
             ) : (
               <>
                 <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-                <span>Ouvir Trecho de {windowDurationSeconds}s</span>
+                <span>Ouvir Trecho</span>
               </>
             )}
           </button>
         </div>
-
-        <p className="text-[11px] text-slate-400 text-center font-medium">
-          Clique ou arraste na linha do tempo para posicionar o trecho de {windowDurationSeconds}s que tocara na rodada.
-        </p>
       </div>
     </div>
   );

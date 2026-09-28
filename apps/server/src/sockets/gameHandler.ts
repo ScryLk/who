@@ -33,9 +33,16 @@ export function setupSocketHandlers(io: Server) {
           const updated = roomStore.handleBotTurnIfActive(room.code);
           broadcastRoomState(updated || room);
         } else {
-          room.turnTimeRemainingSeconds = (room.turnTimeRemainingSeconds ?? 50) - 1;
-          if (room.turnTimeRemainingSeconds <= 0) {
-            const updated = roomStore.advanceTurn(room.code);
+          const now = Date.now();
+          if (room.selectionDeadlineAt) {
+            const remainingMs = Math.max(0, room.selectionDeadlineAt - now);
+            room.turnTimeRemainingSeconds = Math.ceil(remainingMs / 1000);
+          } else {
+            room.turnTimeRemainingSeconds = (room.turnTimeRemainingSeconds ?? 90) - 1;
+          }
+
+          if ((room.turnTimeRemainingSeconds ?? 0) <= 0) {
+            const updated = roomStore.handleTurnTimeout(room.code);
             broadcastRoomState(updated || room);
           } else {
             broadcastRoomState(room);
@@ -81,7 +88,14 @@ export function setupSocketHandlers(io: Server) {
     socket.on('search_tracks', async (data: { query: string }, callback) => {
       try {
         const results = await searchTracks(data.query);
-        callback({ success: true, results });
+        callback({
+          success: true,
+          results,
+          provider: results.provider || 'preview',
+          fallbackApplied: results.fallbackApplied,
+          warning: results.warning,
+          errorCode: results.errorCode,
+        });
       } catch (err: any) {
         callback({ success: false, error: err.message });
       }
@@ -215,6 +229,31 @@ export function setupSocketHandlers(io: Server) {
         broadcastRoomState(result.room);
       } catch (err: any) {
         callback({ success: false, error: err.message });
+      }
+    });
+
+    // Leave Room
+    socket.on('leave_room', (data: { roomCode: string; playerId?: string }, callback) => {
+      try {
+        const pId = data?.playerId || socket.id;
+        const roomCode = data?.roomCode;
+        if (!roomCode) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Código da sala não fornecido.' });
+          return;
+        }
+
+        const result = roomStore.leaveRoom(roomCode, pId);
+        socket.leave(roomCode.toUpperCase());
+
+        if (typeof callback === 'function') {
+          callback({ success: true, deleted: result.deleted });
+        }
+
+        if (result.room) {
+          broadcastRoomState(result.room);
+        }
+      } catch (err: any) {
+        if (typeof callback === 'function') callback({ success: false, error: err.message });
       }
     });
 

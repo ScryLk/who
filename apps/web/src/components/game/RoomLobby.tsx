@@ -21,6 +21,7 @@ import {
   Clock,
   Coins,
   ArrowRight,
+  ArrowLeft,
   Volume2,
   VolumeX,
   X,
@@ -32,6 +33,7 @@ import {
   AlertCircle,
   Minus,
   RotateCcw,
+  LogOut,
 } from 'lucide-react';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 import { BackgroundMusic } from '@/components/common/BackgroundMusic';
@@ -39,6 +41,7 @@ import { CountdownModal } from '@/components/game/CountdownModal';
 import { AudioWaveformScrubber } from '@/components/game/AudioWaveformScrubber';
 import { YouTubeClipSelector } from '@/components/game/YouTubeClipSelector';
 import { YouTubeRoundPlayer } from '@/components/game/YouTubeRoundPlayer';
+import { SelectionCountdown } from '@/components/game/SelectionCountdown';
 import { formatDurationDisplay } from '@who/shared';
 import { BetRiskIndicator } from '@/components/game/BetRiskIndicator';
 import { BetRevealStepper } from '@/components/game/BetRevealStepper';
@@ -71,6 +74,7 @@ interface RoomLobbyProps {
   onResolveRound?: () => void;
   onNextRound?: () => void;
   onSkipRevealStep?: () => void;
+  onLeaveRoom?: () => void;
 }
 
 const PLAYER_CARD_COLORS = [
@@ -94,9 +98,11 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   onPlaceGuesserBet,
   onNextRound,
   onSkipRevealStep,
+  onLeaveRoom,
 }) => {
   const isHost = room.hostId === myPlayerId;
   const [copied, setCopied] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
 
   // Sound Effects Hook
   const {
@@ -122,6 +128,7 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   // Search & Track Selection State (MUSIC_SELECTION)
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchWarning, setSearchWarning] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedTrack, setSelectedTrack] = useState<any | null>(null);
   const [startTimeSeconds, setStartTimeSeconds] = useState(0);
@@ -302,17 +309,24 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     const trimmed = searchQuery.trim();
     if (!trimmed) return;
     setIsSearching(true);
+    setSearchWarning(null);
     const socket = getSocket();
     socket.emit('search_tracks', { query: trimmed }, (res: any) => {
       setIsSearching(false);
       if (res && res.success && res.results) {
         setSearchResults(res.results);
+        if (res.warning) {
+          setSearchWarning(res.warning);
+        }
+      } else if (res && !res.success) {
+        setSearchWarning(res.error || 'Erro ao buscar musicas no servidor.');
       }
     });
   };
 
   const handleSelectTrack = (track: any) => {
     setIsAudioReady(false);
+    setSearchWarning(null);
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       previewAudioRef.current = null;
@@ -398,10 +412,10 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     }
   };
 
-  // Round Audio Player with authoritative clip boundaries
+  // Round Audio Player with authoritative clip boundaries (Preview Tracks only)
   const togglePlayRoundAudio = () => {
     const audioUrl = room.currentTrack?.audioUrl;
-    if (!audioUrl) return;
+    if (!audioUrl || room.currentTrack?.provider === 'youtube' || room.currentTrack?.isVideo) return;
 
     const startSec = room.currentTrack?.startTimeSeconds || 0;
     const endSec = room.currentTrack?.endTimeSeconds || (startSec + clipDuration);
@@ -589,10 +603,16 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
           )}
           {room.phase === 'MUSIC_SELECTION' && (
             <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
-              <Clock className="w-4 h-4 animate-pulse text-amber-400" />
+              <Clock className="w-4 h-4 text-amber-400" />
               <span>
-                Seleção Secreta (Turno {(room.turnIndex ?? 0) + 1}/{room.players.length}) — {room.turnTimeRemainingSeconds ?? 50}s
+                Seleção Secreta (Turno {(room.turnIndex ?? 0) + 1}/{room.players.length})
               </span>
+              <span className="text-white/30">•</span>
+              <SelectionCountdown
+                selectionDeadlineAt={room.selectionDeadlineAt}
+                fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                variant="header"
+              />
             </div>
           )}
           {room.phase === 'BETTING' && (
@@ -645,15 +665,60 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
             title="Abrir Chat da Sala"
           >
             <MessageSquare className="w-4 h-4" />
-            <span className="hidden md:inline text-xs font-bold">Chat</span>
             {unreadChatCount > 0 && !isChatOpen && (
               <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-pink-500 text-white font-black text-[10px] shadow-glow-pink">
                 {unreadChatCount}
               </span>
             )}
           </button>
+
+          {/* Leave Room Button */}
+          {onLeaveRoom && (
+            <button
+              onClick={() => setShowLeaveModal(true)}
+              className="p-2 px-2.5 rounded-xl transition border glass-card backdrop-blur-md text-xs font-bold flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/25 border-red-500/30 text-red-300 hover:text-white shadow-md cursor-pointer active:scale-95"
+              title="Sair da Partida"
+            >
+              <LogOut className="w-4 h-4 text-red-400" />
+              <span className="hidden sm:inline">Sair</span>
+            </button>
+          )}
         </div>
       </header>
+
+      {/* Leave Game Confirmation Modal */}
+      {showLeaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="glass-card w-full max-w-sm p-6 border-2 border-red-500/40 shadow-2xl relative text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/20 border border-red-500/40 flex items-center justify-center mx-auto text-red-400">
+              <LogOut className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-white">Sair da Partida?</h3>
+              <p className="text-xs text-slate-300 mt-1">
+                Você sairá da sala atual e retornará ao menu principal.
+              </p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setShowLeaveModal(false)}
+                className="flex-1 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/20 transition cursor-pointer"
+              >
+                Continuar
+              </button>
+              <button
+                onClick={() => {
+                  setShowLeaveModal(false);
+                  onLeaveRoom?.();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-black text-xs shadow-lg transition cursor-pointer active:scale-95"
+              >
+                Sair da Sala
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 2. Main Arena & Table Layout */}
       <div className="flex-1 flex gap-3 min-h-0 relative overflow-hidden">
@@ -799,342 +864,489 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                         O jogador está selecionando a música e o trecho de {clipDuration} segundos no acervo.
                       </p>
                     </div>
-                  </div>
-                ) : (
-                  /* My turn: 2-step selection */
-                  <div className="space-y-3 flex-1 flex flex-col">
-                    {/* Navigation Tabs */}
-                    <div className="flex items-center gap-2 p-1 rounded-2xl bg-white/10 border border-white/15">
-                      <button
-                        type="button"
-                        onClick={() => setActiveSelectionTab('MUSIC')}
-                        className={`flex-1 py-2 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition ${
-                          activeSelectionTab === 'MUSIC'
-                            ? 'bg-yellow-400 text-slate-950 shadow-glow-yellow'
-                            : 'text-white/80 hover:text-white hover:bg-white/5'
-                        }`}
-                      >
-                        <Music className="w-4 h-4" />
-                        <span>1. Escolher Faixa & Trecho</span>
-                        {selectedTrack && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-950" />}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setActiveSelectionTab('PREDICTION')}
-                        className={`flex-1 py-2 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition ${
-                          activeSelectionTab === 'PREDICTION'
-                            ? 'bg-yellow-400 text-slate-950 shadow-glow-yellow'
-                            : 'text-white/80 hover:text-white hover:bg-white/5'
-                        }`}
-                      >
-                        <Star className="w-4 h-4" />
-                        <span>2. Previsão do Dono</span>
-                      </button>
+                    <div className="pt-2">
+                      <SelectionCountdown
+                        selectionDeadlineAt={room.selectionDeadlineAt}
+                        fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                        isMuted={isSfxMuted}
+                        onPlayTick={playTickSound}
+                        variant="actionBar"
+                      />
                     </div>
-
-                    {/* TAB 1: MUSIC & SCRUBBER */}
-                    {activeSelectionTab === 'MUSIC' && (
-                      <div className="space-y-3 flex-1">
-                        {/* Search Input */}
-                        <form onSubmit={handleSearch} className="flex gap-2">
-                          <div className="relative flex-1">
-                            <input
-                              type="text"
-                              placeholder="Digite artista ou música (ex: Evidências, Daft Punk, Queen...)"
-                              value={searchQuery}
-                              onChange={(e) => setSearchQuery(e.target.value)}
-                              className="w-full px-4 py-2.5 rounded-xl bg-white/10 border border-yellow-400/40 text-white placeholder-blue-200/50 text-xs focus:outline-none focus:border-yellow-400 transition pr-8"
-                            />
-                            {isSearching && (
-                              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-yellow-400 border-t-transparent animate-spin" />
-                            )}
-                          </div>
-                          <button
-                            type="submit"
-                            className="px-4 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold transition flex items-center justify-center shadow-glow-yellow flex-shrink-0"
-                            title="Buscar música"
-                          >
-                            <Search className="w-4 h-4" />
-                          </button>
-                        </form>
-
-                        {/* Search Results Dropdown */}
-                        {searchResults.length > 0 && (
-                          <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-1 bg-slate-950/95 p-2 rounded-2xl border border-yellow-400/30 backdrop-blur-xl shadow-2xl">
-                            {searchResults.map((track) => {
-                              const isCurrent = selectedTrack?.id === track.id;
-                              return (
-                                <div
-                                  key={track.id}
-                                  onClick={() => handleSelectTrack(track)}
-                                  className={`p-2 rounded-xl cursor-pointer text-xs flex items-center justify-between gap-3 transition ${
-                                    isCurrent
-                                      ? 'bg-yellow-400/20 text-yellow-300 font-bold border border-yellow-400/30'
-                                      : 'hover:bg-white/10 text-white'
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                    {track.albumArt ? (
-                                      <img
-                                        src={track.albumArt}
-                                        alt={track.title}
-                                        className="w-8 h-8 rounded-lg object-cover shadow border border-white/15 flex-shrink-0"
-                                      />
-                                    ) : (
-                                      <div className="w-8 h-8 rounded-lg bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
-                                        <Music className="w-4 h-4" />
-                                      </div>
-                                    )}
-                                    <div className="min-w-0 text-left">
-                                      <div className="font-extrabold truncate text-white flex items-center gap-1.5">
-                                        <span className="truncate">{track.title}</span>
-                                        {track.provider === 'youtube' || track.isVideo ? (
-                                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 font-bold border border-red-500/30 flex-shrink-0">
-                                            YouTube
-                                          </span>
-                                        ) : (
-                                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30 flex-shrink-0">
-                                            Preview
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="text-[10px] text-blue-200/80 truncate flex items-center gap-2">
-                                        <span>{track.artist}</span>
-                                        {track.durationSeconds && (
-                                          <span className="text-slate-400 font-mono">
-                                            ({formatDurationDisplay(track.durationSeconds)})
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-yellow-400 text-slate-950 flex items-center gap-1">
-                                    <span>Escolher</span>
-                                    <Check className="w-3 h-3 stroke-[3]" />
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {/* Quick Picks */}
-                        {!selectedTrack && searchResults.length === 0 && (
-                          <div className="p-3 rounded-2xl bg-white/5 border border-white/10 text-left space-y-2">
-                            <span className="text-[11px] font-bold text-yellow-300 flex items-center gap-1">
-                              <Sparkles className="w-3.5 h-3.5" />
-                              <span>Sugestões Rápidas:</span>
-                            </span>
-                            <div className="flex flex-wrap gap-1.5">
-                              {['Evidências', 'Billie Jean', 'Blinding Lights', 'Bohemian Rhapsody', 'Cheia de Manias', 'Levitating'].map((sug) => (
-                                <button
-                                  key={sug}
-                                  type="button"
-                                  onClick={() => {
-                                    setSearchQuery(sug);
-                                    const socket = getSocket();
-                                    socket.emit('search_tracks', { query: sug }, (res: any) => {
-                                      if (res && res.success && res.results && res.results.length > 0) {
-                                        handleSelectTrack(res.results[0]);
-                                      }
-                                    });
-                                  }}
-                                  className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-yellow-400/20 text-white hover:text-yellow-300 text-[11px] font-semibold transition border border-white/10"
-                                >
-                                  + {sug}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Music Selector Component: YouTube Full-Track vs Waveform Scrubber */}
-                        {selectedTrack && (
-                          <div className="space-y-3">
-                            {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
-                              <YouTubeClipSelector
-                                selectedTrack={selectedTrack}
-                                startTimeSeconds={startTimeSeconds}
-                                windowDurationSeconds={clipDuration}
-                                onChangeStartTime={handleStartTimeChange}
-                                onReady={(duration) => {
-                                  setIsAudioReady(true);
-                                  setTrackDuration(duration);
-                                }}
-                              />
-                            ) : (
-                              <AudioWaveformScrubber
-                                selectedTrack={selectedTrack}
-                                startTimeSeconds={startTimeSeconds}
-                                windowDurationSeconds={clipDuration}
-                                onChangeStartTime={handleStartTimeChange}
-                                onReady={(duration) => {
-                                  setIsAudioReady(true);
-                                  setTrackDuration(duration);
-                                }}
-                              />
-                            )}
-
-                            <button
-                              type="button"
-                              disabled={!isAudioReady}
-                              onClick={() => setActiveSelectionTab('PREDICTION')}
-                              className={`w-full py-3 rounded-2xl font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2 ${
-                                !isAudioReady
-                                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                                  : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 active:scale-95'
-                              }`}
-                            >
-                              <span>
-                                {!isAudioReady ? 'Carregando prévia...' : 'Avançar para Previsão do Dono'}
-                              </span>
-                              <ArrowRight className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
+                  </div>
+                ) : !selectedTrack ? (
+                  /* MOMENT 1: SEARCH_MODE ("Qual música eu quero?") */
+                  <div className="flex-1 flex flex-col justify-between space-y-3">
+                    <div className="space-y-3">
+                      <div className="text-left space-y-0.5">
+                        <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
+                          <Search className="w-5 h-5 text-yellow-400" />
+                          <span>1. Escolha a Música da Partida</span>
+                        </h3>
+                        <p className="text-xs text-blue-200/80">
+                          Pesquise um artista, clássico ou hit do acervo YouTube / Mídia
+                        </p>
                       </div>
-                    )}
 
-                    {/* TAB 2: OWNER PREDICTION */}
-                    {activeSelectionTab === 'PREDICTION' && (
-                      <div className="space-y-3 text-left">
-                        <div className="p-3.5 rounded-2xl bg-white/10 border border-white/15 space-y-3 backdrop-blur-md">
-                          <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
-                            <Star className="w-4 h-4 fill-current text-yellow-400" />
-                            <span>Como a sala vai reagir à sua música?</span>
-                          </label>
+                      {/* Search Input Form */}
+                      <form onSubmit={handleSearch} className="flex gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            placeholder="Digite artista ou música (ex: Evidências, Daft Punk, Queen...)"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-xl bg-white/10 border border-yellow-400/40 text-white placeholder-blue-200/50 text-xs focus:outline-none focus:border-yellow-400 transition pr-8"
+                          />
+                          {isSearching && (
+                            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-yellow-400 border-t-transparent animate-spin" />
+                          )}
+                        </div>
+                        <button
+                          type="submit"
+                          className="px-4 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold transition flex items-center justify-center shadow-glow-yellow flex-shrink-0 cursor-pointer"
+                          title="Buscar música"
+                        >
+                          <Search className="w-4 h-4" />
+                        </button>
+                      </form>
 
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                            {[
-                              { kind: 'PLAYER_COUNT', label: 'Quantidade Exata', sub: '3.0x retorno' },
-                              { kind: 'MORE_THAN', label: 'Mais de X Jogadores', sub: '2.5x retorno' },
-                              { kind: 'FEWER_THAN', label: 'Menos de X Jogadores', sub: '2.5x retorno' },
-                              { kind: 'SPECIFIC_PLAYERS', label: 'Jogador Específico', sub: '3.5x retorno' },
-                              { kind: 'NONE', label: 'Ninguém (0)', sub: '4.0x retorno' },
-                            ].map((opt) => (
+                      {/* Search Warning */}
+                      {searchWarning && (
+                        <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-medium flex items-center gap-2 shadow-md">
+                          <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-400" />
+                          <span>{searchWarning}</span>
+                        </div>
+                      )}
+
+                      {/* Search Results */}
+                      {searchResults.length > 0 && (
+                        <div className="max-h-56 sm:max-h-64 overflow-y-auto custom-scrollbar space-y-1 bg-slate-950/95 p-2 rounded-2xl border border-yellow-400/30 backdrop-blur-xl shadow-2xl">
+                          {searchResults.map((track) => (
+                            <div
+                              key={track.id}
+                              onClick={() => handleSelectTrack(track)}
+                              className="p-2 rounded-xl cursor-pointer text-xs flex items-center justify-between gap-3 transition hover:bg-white/10 text-white"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                {track.albumArt ? (
+                                  <img
+                                    src={track.albumArt}
+                                    alt={track.title}
+                                    className="w-9 h-9 rounded-lg object-cover shadow border border-white/15 flex-shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-9 h-9 rounded-lg bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
+                                    <Music className="w-4 h-4" />
+                                  </div>
+                                )}
+                                <div className="min-w-0 text-left">
+                                  <div className="font-extrabold truncate text-white flex items-center gap-1.5">
+                                    <span className="truncate">{track.title}</span>
+                                    {track.provider === 'youtube' || track.isVideo ? (
+                                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 font-bold border border-red-500/30 flex-shrink-0">
+                                        YouTube
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30 flex-shrink-0">
+                                        Preview
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-blue-200/80 truncate flex items-center gap-2">
+                                    <span>{track.artist}</span>
+                                    {track.durationSeconds && (
+                                      <span className="text-slate-400 font-mono">
+                                        ({formatDurationDisplay(track.durationSeconds)})
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
                               <button
-                                key={opt.kind}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSelectTrack(track);
+                                }}
+                                className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center gap-1 cursor-pointer transition active:scale-95"
+                              >
+                                <span>Escolher</span>
+                                <Check className="w-3 h-3 stroke-[3]" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Quick Suggestions when no results */}
+                      {searchResults.length === 0 && (
+                        <div className="p-3 rounded-2xl bg-white/5 border border-white/10 text-left space-y-2">
+                          <span className="text-[11px] font-bold text-yellow-300 flex items-center gap-1">
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>Sugestões Rápidas:</span>
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['Evidências', 'Billie Jean', 'Blinding Lights', 'Bohemian Rhapsody', 'Cheia de Manias', 'Levitating'].map((sug) => (
+                              <button
+                                key={sug}
                                 type="button"
                                 onClick={() => {
-                                  playChipSound();
-                                  setOwnerPredictionKind(opt.kind as SecondaryPredictionKind);
+                                  setSearchQuery(sug);
+                                  const socket = getSocket();
+                                  socket.emit('search_tracks', { query: sug }, (res: any) => {
+                                    if (res && res.success && res.results && res.results.length > 0) {
+                                      handleSelectTrack(res.results[0]);
+                                      if (res.warning) {
+                                        setSearchWarning(res.warning);
+                                      }
+                                    }
+                                  });
                                 }}
-                                className={`p-2 rounded-xl border text-left transition ${
-                                  ownerPredictionKind === opt.kind
-                                    ? 'bg-yellow-400 text-slate-950 border-yellow-300 font-extrabold shadow-glow-yellow'
-                                    : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
-                                }`}
+                                className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-yellow-400/20 text-white hover:text-yellow-300 text-[11px] font-semibold transition border border-white/10 cursor-pointer"
                               >
-                                <div className="text-xs font-extrabold">{opt.label}</div>
-                                <div className={`text-[10px] ${ownerPredictionKind === opt.kind ? 'text-slate-900 font-bold' : 'text-cyan-300'}`}>
-                                  {opt.sub}
-                                </div>
+                                + {sug}
                               </button>
                             ))}
                           </div>
+                        </div>
+                      )}
+                    </div>
 
-                          {/* Target players if SPECIFIC_PLAYERS */}
-                          {ownerPredictionKind === 'SPECIFIC_PLAYERS' && (
-                            <div className="space-y-1.5 pt-2 border-t border-white/10">
-                              <span className="text-xs font-bold text-blue-200">Quem vai acertar sua música?</span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {room.players
-                                  .filter((p) => p.id !== myPlayerId)
-                                  .map((p) => {
-                                    const isSelected = selectedTargetPlayerIds.includes(p.id);
-                                    return (
-                                      <button
-                                        key={p.id}
-                                        type="button"
-                                        onClick={() => {
-                                          playChipSound();
-                                          if (isSelected) {
-                                            setSelectedTargetPlayerIds(selectedTargetPlayerIds.filter((id) => id !== p.id));
-                                          } else {
-                                            setSelectedTargetPlayerIds([...selectedTargetPlayerIds, p.id]);
-                                          }
-                                        }}
-                                        className={`px-3 py-1 rounded-xl border text-xs font-extrabold transition flex items-center gap-1 ${
-                                          isSelected
-                                            ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
-                                            : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
-                                        }`}
-                                      >
-                                        <span>{p.nickname}</span>
-                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
-                                      </button>
-                                    );
-                                  })}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Chips to bet */}
-                          <div className="flex items-center justify-between pt-2 border-t border-white/10">
-                            <span className="text-xs font-extrabold text-white flex items-center gap-1">
-                              <Coins className="w-4 h-4 text-yellow-300" /> Fichas na previsão:
-                            </span>
-                            <div className="flex gap-1.5">
-                              {[50, 100, 200, 500].map((amt) => {
-                                const canAfford = amt <= myAvailableBalance;
-                                return (
-                                  <button
-                                    key={amt}
-                                    type="button"
-                                    onClick={() => {
-                                      if (!canAfford) {
-                                        triggerBlockedFeedback(
-                                          `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
-                                        );
-                                        return;
-                                      }
-                                      playChipSound();
-                                      setOwnerChipBet(amt);
-                                    }}
-                                    aria-disabled={!canAfford}
-                                    className={`px-2.5 py-1 rounded-xl text-xs font-extrabold border transition ${
-                                      ownerChipBet === amt
-                                        ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
-                                        : canAfford
-                                        ? 'bg-white/10 text-white border-white/20 hover:bg-white/20'
-                                        : 'bg-white/5 border-red-500/20 text-slate-500 cursor-not-allowed opacity-40'
-                                    }`}
-                                  >
-                                    +{amt}
-                                  </button>
-                                );
-                              })}
-                            </div>
+                    {/* Action Bar for Search Mode */}
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
+                      <SelectionCountdown
+                        selectionDeadlineAt={room.selectionDeadlineAt}
+                        fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                        isMuted={isSfxMuted}
+                        onPlayTick={playTickSound}
+                        variant="actionBar"
+                      />
+                      <div className="text-[11px] text-blue-200/70 font-medium text-right hidden sm:block">
+                        Selecione uma faixa para abrir o editor de trecho
+                      </div>
+                    </div>
+                  </div>
+                ) : activeSelectionTab === 'MUSIC' ? (
+                  /* MOMENT 2: CLIP_EDIT_MODE ("Qual trecho dessa música eu quero?") */
+                  <div className="flex-1 flex flex-col justify-between space-y-2">
+                    {/* Top Track Summary Banner with "Trocar Faixa" */}
+                    <div className="p-2 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-between gap-3 backdrop-blur-md">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {selectedTrack.albumArt ? (
+                          <img
+                            src={selectedTrack.albumArt}
+                            alt={selectedTrack.title}
+                            className="w-9 h-9 rounded-xl object-cover shadow border border-white/20 flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-xl bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
+                            <Music className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div className="min-w-0 text-left">
+                          <div className="font-extrabold text-xs sm:text-sm truncate text-white flex items-center gap-2">
+                            <span className="truncate">{selectedTrack.title}</span>
+                            {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 font-bold border border-red-500/30 flex-shrink-0">
+                                YouTube
+                              </span>
+                            ) : (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30 flex-shrink-0">
+                                Preview
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-blue-200/80 truncate flex items-center gap-2">
+                            <span>{selectedTrack.artist}</span>
+                            {selectedTrack.durationSeconds && (
+                              <span className="text-slate-400 font-mono">
+                                • {formatDurationDisplay(selectedTrack.durationSeconds)}
+                              </span>
+                            )}
                           </div>
                         </div>
+                      </div>
 
-                        {/* Confirmation Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (previewAudioRef.current) {
+                            previewAudioRef.current.pause();
+                            previewAudioRef.current = null;
+                            setIsPlayingPreview(false);
+                          }
+                          setSelectedTrack(null);
+                          setIsAudioReady(false);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white text-xs font-bold transition border border-white/15 flex items-center gap-1.5 cursor-pointer flex-shrink-0 active:scale-95"
+                        title="Buscar outra música"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Trocar Faixa</span>
+                      </button>
+                    </div>
+
+                    {/* Arena: YouTube Clip Selector or Audio Scrubber */}
+                    <div className="flex-1 flex flex-col justify-center">
+                      {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
+                        <YouTubeClipSelector
+                          key={selectedTrack.id || selectedTrack.videoId || selectedTrack.youtubeId}
+                          selectedTrack={selectedTrack}
+                          startTimeSeconds={startTimeSeconds}
+                          windowDurationSeconds={clipDuration}
+                          onChangeStartTime={handleStartTimeChange}
+                          onReady={(duration) => {
+                            setIsAudioReady(true);
+                            setTrackDuration(duration);
+                          }}
+                        />
+                      ) : (
+                        <AudioWaveformScrubber
+                          key={selectedTrack.id}
+                          selectedTrack={selectedTrack}
+                          startTimeSeconds={startTimeSeconds}
+                          windowDurationSeconds={clipDuration}
+                          onChangeStartTime={handleStartTimeChange}
+                          onReady={(duration) => {
+                            setIsAudioReady(true);
+                            setTrackDuration(duration);
+                          }}
+                        />
+                      )}
+                    </div>
+
+                    {/* Action Bar for Clip Edit Mode */}
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
+                      <SelectionCountdown
+                        selectionDeadlineAt={room.selectionDeadlineAt}
+                        fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                        isMuted={isSfxMuted}
+                        onPlayTick={playTickSound}
+                        variant="actionBar"
+                      />
+
+                      <button
+                        type="button"
+                        disabled={!isAudioReady}
+                        onClick={() => setActiveSelectionTab('PREDICTION')}
+                        className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2 cursor-pointer ${
+                          !isAudioReady
+                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                            : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 active:scale-95'
+                        }`}
+                      >
+                        <span>
+                          {!isAudioReady ? 'Carregando trecho...' : 'Confirmar Trecho →'}
+                        </span>
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* MOMENT 3: PREDICTION_MODE ("Como acho que os outros vão reagir?") */
+                  <div className="flex-1 flex flex-col justify-between space-y-2">
+                    {/* Top Track & Clip Summary Banner */}
+                    <div className="p-2 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-between gap-3 backdrop-blur-md">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {selectedTrack.albumArt ? (
+                          <img
+                            src={selectedTrack.albumArt}
+                            alt={selectedTrack.title}
+                            className="w-9 h-9 rounded-xl object-cover shadow border border-white/20 flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-xl bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
+                            <Music className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div className="min-w-0 text-left">
+                          <div className="font-extrabold text-xs sm:text-sm truncate text-white">
+                            {selectedTrack.title}
+                          </div>
+                          <div className="text-[11px] text-blue-200/80 truncate flex items-center gap-2">
+                            <span>{selectedTrack.artist}</span>
+                            <span className="text-yellow-300 font-mono font-bold">
+                              • Trecho: {formatTime(startTimeSeconds)} → {formatTime(startTimeSeconds + clipDuration)} ({clipDuration}s)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveSelectionTab('MUSIC')}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white text-xs font-bold transition border border-white/15 flex items-center gap-1.5 cursor-pointer flex-shrink-0 active:scale-95"
+                        title="Voltar ao editor de trecho"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Editar Trecho</span>
+                      </button>
+                    </div>
+
+                    {/* Prediction Arena */}
+                    <div className="space-y-3 text-left">
+                      <div className="p-3 rounded-2xl bg-white/10 border border-white/15 space-y-2.5 backdrop-blur-md">
+                        <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
+                          <Star className="w-4 h-4 fill-current text-yellow-400" />
+                          <span>Como a sala vai reagir à sua música?</span>
+                        </label>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {[
+                            { kind: 'PLAYER_COUNT', label: 'Quantidade Exata', sub: '3.0x retorno' },
+                            { kind: 'MORE_THAN', label: 'Mais de X Jogadores', sub: '2.5x retorno' },
+                            { kind: 'FEWER_THAN', label: 'Menos de X Jogadores', sub: '2.5x retorno' },
+                            { kind: 'SPECIFIC_PLAYERS', label: 'Jogador Específico', sub: '3.5x retorno' },
+                            { kind: 'NONE', label: 'Ninguém (0)', sub: '4.0x retorno' },
+                          ].map((opt) => (
+                            <button
+                              key={opt.kind}
+                              type="button"
+                              onClick={() => {
+                                playChipSound();
+                                setOwnerPredictionKind(opt.kind as SecondaryPredictionKind);
+                              }}
+                              className={`p-2 rounded-xl border text-left transition cursor-pointer ${
+                                ownerPredictionKind === opt.kind
+                                  ? 'bg-yellow-400 text-slate-950 border-yellow-300 font-extrabold shadow-glow-yellow'
+                                  : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
+                              }`}
+                            >
+                              <div className="text-xs font-extrabold">{opt.label}</div>
+                              <div className={`text-[10px] ${ownerPredictionKind === opt.kind ? 'text-slate-900 font-bold' : 'text-cyan-300'}`}>
+                                {opt.sub}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Target players if SPECIFIC_PLAYERS */}
+                        {ownerPredictionKind === 'SPECIFIC_PLAYERS' && (
+                          <div className="space-y-1.5 pt-2 border-t border-white/10">
+                            <span className="text-xs font-bold text-blue-200">Quem vai acertar sua música?</span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {room.players
+                                .filter((p) => p.id !== myPlayerId)
+                                .map((p) => {
+                                  const isSelected = selectedTargetPlayerIds.includes(p.id);
+                                  return (
+                                    <button
+                                      key={p.id}
+                                      type="button"
+                                      onClick={() => {
+                                        playChipSound();
+                                        if (isSelected) {
+                                          setSelectedTargetPlayerIds(selectedTargetPlayerIds.filter((id) => id !== p.id));
+                                        } else {
+                                          setSelectedTargetPlayerIds([...selectedTargetPlayerIds, p.id]);
+                                        }
+                                      }}
+                                      className={`px-3 py-1 rounded-xl border text-xs font-extrabold transition flex items-center gap-1 cursor-pointer ${
+                                        isSelected
+                                          ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
+                                          : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                      }`}
+                                    >
+                                      <span>{p.nickname}</span>
+                                      {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Chips to bet */}
+                        <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                          <span className="text-xs font-extrabold text-white flex items-center gap-1">
+                            <Coins className="w-4 h-4 text-yellow-300" /> Fichas na previsão:
+                          </span>
+                          <div className="flex gap-1.5">
+                            {[50, 100, 200, 500].map((amt) => {
+                              const canAfford = amt <= myAvailableBalance;
+                              return (
+                                <button
+                                  key={amt}
+                                  type="button"
+                                  onClick={() => {
+                                    if (!canAfford) {
+                                      triggerBlockedFeedback(
+                                        `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
+                                      );
+                                      return;
+                                    }
+                                    playChipSound();
+                                    setOwnerChipBet(amt);
+                                  }}
+                                  aria-disabled={!canAfford}
+                                  className={`px-2.5 py-1 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                                    ownerChipBet === amt
+                                      ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
+                                      : canAfford
+                                      ? 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                      : 'bg-white/5 border-red-500/20 text-slate-500 cursor-not-allowed opacity-40'
+                                  }`}
+                                >
+                                  +{amt}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Bar for Prediction Mode */}
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
+                      <SelectionCountdown
+                        selectionDeadlineAt={room.selectionDeadlineAt}
+                        fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                        isMuted={isSfxMuted}
+                        onPlayTick={playTickSound}
+                        variant="actionBar"
+                      />
+
+                      <div className="flex items-center gap-2">
                         <button
-                          disabled={!selectedTrack || confirmedChoice}
+                          type="button"
+                          onClick={() => setActiveSelectionTab('MUSIC')}
+                          className="px-3.5 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/15 transition cursor-pointer flex items-center gap-1.5"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>Voltar ao Trecho</span>
+                        </button>
+
+                        <button
+                          disabled={!selectedTrack || !isAudioReady || confirmedChoice}
                           onClick={handleConfirmChoice}
-                          className={`w-full py-3.5 rounded-2xl font-black text-sm transition shadow-xl flex items-center justify-center gap-2 ${
+                          className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-xl flex items-center justify-center gap-2 cursor-pointer ${
                             confirmedChoice
                               ? 'bg-emerald-500 text-white cursor-not-allowed'
-                              : !selectedTrack
+                              : !selectedTrack || !isAudioReady
                               ? 'bg-white/10 text-white/40 cursor-not-allowed border border-white/10'
                               : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 shadow-glow-yellow active:scale-95'
                           }`}
                         >
                           {confirmedChoice ? (
                             <>
-                              <CheckCircle2 className="w-5 h-5" />
-                              <span>Música e Previsão Confirmadas!</span>
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>Música Confirmada!</span>
+                            </>
+                          ) : !isAudioReady ? (
+                            <>
+                              <Clock className="w-4 h-4 animate-pulse" />
+                              <span>Aguardando Áudio...</span>
                             </>
                           ) : (
                             <>
-                              <Check className="w-5 h-5 stroke-[3]" />
-                              <span>Confirmar Música Secreta</span>
+                              <Check className="w-4 h-4 stroke-[3]" />
+                              <span>Confirmar Escolha</span>
                             </>
                           )}
                         </button>
                       </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </div>

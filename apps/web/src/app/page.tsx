@@ -218,13 +218,29 @@ export default function Home() {
     });
   };
 
+  const handleLeaveRoom = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('who_player_id');
+      localStorage.removeItem('who_room_code');
+    }
+    if (room) {
+      const socket = getSocket();
+      socket.emit('leave_room', { roomCode: room.code, playerId: myPlayerId });
+    }
+    setRoom(null);
+    setMyPlayerId('');
+  };
+
   // Render Game Screens if player is in an active room
   if (room) {
     const myPlayer = room.players.find((p) => p.id === myPlayerId);
 
     return (
-      <main className="h-screen max-h-screen overflow-hidden bg-gradient-main flex flex-col justify-between relative">
-
+      <main
+        className={`h-screen max-h-screen ${
+          room.phase === 'GAME_OVER' ? 'overflow-y-auto' : 'overflow-hidden'
+        } bg-gradient-main flex flex-col justify-between relative`}
+      >
         {(room.phase === 'LOBBY' ||
           room.phase === 'COUNTDOWN' ||
           room.phase === 'PREPARATION' ||
@@ -243,11 +259,16 @@ export default function Home() {
             onResolveRound={handleResolveRound}
             onNextRound={handleNextRound}
             onSkipRevealStep={handleSkipRevealStep}
+            onLeaveRoom={handleLeaveRoom}
           />
         )}
 
         {room.phase === 'GAME_OVER' && (
-          <GameOver room={room} onPlayAgain={handleStartGame} />
+          <GameOver
+            room={room}
+            onPlayAgain={handleStartGame}
+            onLeaveRoom={handleLeaveRoom}
+          />
         )}
 
 

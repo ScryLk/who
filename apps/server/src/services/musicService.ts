@@ -7,6 +7,7 @@ import {
   searchYouTubeVideos,
   getYouTubeVideo,
   isYouTubeApiKeyConfigured,
+  type YouTubeErrorCode,
 } from './youtubeService';
 
 export interface TrackSearchResult {
@@ -24,6 +25,13 @@ export interface TrackSearchResult {
   youtubeId?: string;
   startTimeSeconds?: number;
 }
+
+export type SearchTracksArray = TrackSearchResult[] & {
+  provider: MusicProvider;
+  fallbackApplied?: boolean;
+  warning?: string;
+  errorCode?: YouTubeErrorCode;
+};
 
 export function extractYouTubeInfo(url: string): { youtubeId: string | null; startTimeSeconds: number } {
   const youtubeId = extractYouTubeVideoId(url);
@@ -134,9 +142,12 @@ export const FEATURED_CATALOG: TrackSearchResult[] = [
   },
 ];
 
-export async function searchTracks(query: string): Promise<TrackSearchResult[]> {
+export async function searchTracks(query: string): Promise<SearchTracksArray> {
   if (!query || query.trim().length === 0) {
-    return FEATURED_CATALOG;
+    const list = [...FEATURED_CATALOG] as SearchTracksArray;
+    list.provider = 'preview';
+    list.fallbackApplied = false;
+    return list;
   }
 
   const trimmed = query.trim();
@@ -147,58 +158,87 @@ export async function searchTracks(query: string): Promise<TrackSearchResult[]> 
     const startTimeSeconds = extractYouTubeStartTime(trimmed);
     const videoDetails = await getYouTubeVideo(directYtId);
     if (videoDetails) {
-      return [
+      const list = [
         {
           ...videoDetails,
           startTimeSeconds: startTimeSeconds || videoDetails.startTimeSeconds || 0,
         },
-      ];
+      ] as SearchTracksArray;
+      list.provider = 'youtube';
+      list.fallbackApplied = false;
+      return list;
     }
 
-    // Direct YouTube URL fallback if details API not reachable
-    return [
-      {
-        id: `yt-${directYtId}`,
-        title: `Vídeo do YouTube (${directYtId})`,
-        artist: 'YouTube Video',
-        albumArt: `https://img.youtube.com/vi/${directYtId}/hqdefault.jpg`,
-        audioUrl: `https://www.youtube.com/watch?v=${directYtId}`,
-        genre: 'Vídeo',
-        provider: 'youtube',
-        durationSeconds: 180,
-        videoId: directYtId,
-        channelTitle: 'YouTube Video',
-        isVideo: true,
-        youtubeId: directYtId,
-        startTimeSeconds,
-      },
-    ];
+    // Direct YouTube URL fallback if details API not reachable: duration is undefined until player onReady
+    const fallbackDirect: TrackSearchResult = {
+      id: `yt-${directYtId}`,
+      title: `Vídeo do YouTube (${directYtId})`,
+      artist: 'YouTube Video',
+      albumArt: `https://img.youtube.com/vi/${directYtId}/hqdefault.jpg`,
+      audioUrl: `https://www.youtube.com/watch?v=${directYtId}`,
+      genre: 'Vídeo',
+      provider: 'youtube',
+      durationSeconds: undefined,
+      videoId: directYtId,
+      channelTitle: 'YouTube Video',
+      isVideo: true,
+      youtubeId: directYtId,
+      startTimeSeconds,
+    };
+    const list = [fallbackDirect] as SearchTracksArray;
+    list.provider = 'youtube';
+    list.fallbackApplied = false;
+    return list;
   }
 
-  // 2. YouTube Data API search if key is configured
+  // 2. YouTube Data API search
+  let ytErrorCode: YouTubeErrorCode | undefined;
+  let ytErrorMessage: string | undefined;
+
   if (isYouTubeApiKeyConfigured()) {
     try {
-      const ytResults = await searchYouTubeVideos(trimmed);
-      if (ytResults && ytResults.length > 0) {
-        return ytResults;
+      const ytResult = await searchYouTubeVideos(trimmed);
+      if (ytResult.success && ytResult.tracks.length > 0) {
+        const list = ytResult.tracks as SearchTracksArray;
+        list.provider = 'youtube';
+        list.fallbackApplied = false;
+        return list;
       }
-    } catch (ytErr) {
-      console.warn('[MusicService] YouTube search failed, falling back to preview provider:', ytErr);
+      ytErrorCode = ytResult.errorCode;
+      ytErrorMessage = ytResult.errorMessage;
+    } catch (ytErr: any) {
+      console.warn('[MusicService] YouTube search error:', ytErr);
+      ytErrorCode = 'YOUTUBE_NETWORK_ERROR';
+      ytErrorMessage = ytErr?.message;
     }
+  } else {
+    ytErrorCode = 'YOUTUBE_KEY_MISSING';
+    ytErrorMessage = 'YOUTUBE_API_KEY não configurada no servidor';
   }
 
-  // 3. Fallback: iTunes preview search + catalog
+  // 3. Fallback to iTunes preview + catalog when YouTube fails or is not configured
+  // Clearly identify this as fallbackApplied and provider = preview
   try {
     const encoded = encodeURIComponent(trimmed);
     const response = await fetch(
       `https://itunes.apple.com/search?term=${encoded}&entity=song&limit=10`
     );
     if (!response.ok) {
-      return filterCatalog(trimmed);
+      const catalog = filterCatalog(trimmed);
+      catalog.provider = 'preview';
+      catalog.fallbackApplied = true;
+      catalog.warning = 'Busca do YouTube indisponível. Exibindo catálogo de prévias (30s) como contingência.';
+      catalog.errorCode = ytErrorCode;
+      return catalog;
     }
     const data = (await response.json()) as { results: any[] };
     if (!data.results || data.results.length === 0) {
-      return filterCatalog(trimmed);
+      const catalog = filterCatalog(trimmed);
+      catalog.provider = 'preview';
+      catalog.fallbackApplied = true;
+      catalog.warning = 'Nenhum resultado no YouTube ou iTunes. Exibindo sugestões do catálogo.';
+      catalog.errorCode = ytErrorCode;
+      return catalog;
     }
 
     const validTracks: TrackSearchResult[] = data.results
@@ -210,22 +250,39 @@ export async function searchTracks(query: string): Promise<TrackSearchResult[]> 
         albumArt: item.artworkUrl100 || item.artworkUrl60 || '',
         audioUrl: item.previewUrl,
         genre: item.primaryGenreName || 'Pop',
-        provider: 'preview',
+        provider: 'preview' as const,
         durationSeconds: 30,
       }));
 
     if (validTracks.length === 0) {
-      return filterCatalog(trimmed);
+      const catalog = filterCatalog(trimmed);
+      catalog.provider = 'preview';
+      catalog.fallbackApplied = true;
+      catalog.warning = 'Busca do YouTube indisponível. Exibindo catálogo de prévias (30s).';
+      catalog.errorCode = ytErrorCode;
+      return catalog;
     }
 
-    return validTracks;
+    const list = validTracks as SearchTracksArray;
+    list.provider = 'preview';
+    list.fallbackApplied = true;
+    list.warning = ytErrorMessage
+      ? `Aviso: ${ytErrorMessage}. Exibindo prévias de áudio (30s) do acervo alternativo.`
+      : 'Busca do YouTube não disponível. Exibindo prévias de áudio (30s) como contingência.';
+    list.errorCode = ytErrorCode;
+    return list;
   } catch (error) {
     console.error('[MusicService] Error fetching iTunes API, falling back to catalog:', error);
-    return filterCatalog(trimmed);
+    const catalog = filterCatalog(trimmed);
+    catalog.provider = 'preview';
+    catalog.fallbackApplied = true;
+    catalog.warning = 'Falha nos serviços de busca. Exibindo acervo local.';
+    catalog.errorCode = ytErrorCode;
+    return catalog;
   }
 }
 
-function filterCatalog(query: string): TrackSearchResult[] {
+function filterCatalog(query: string): SearchTracksArray {
   const q = query.toLowerCase().trim();
   const matched = FEATURED_CATALOG.filter(
     (t) =>
@@ -233,5 +290,7 @@ function filterCatalog(query: string): TrackSearchResult[] {
       t.artist.toLowerCase().includes(q) ||
       (t.genre && t.genre.toLowerCase().includes(q))
   );
-  return matched.length > 0 ? matched : FEATURED_CATALOG;
+  const list = (matched.length > 0 ? [...matched] : [...FEATURED_CATALOG]) as SearchTracksArray;
+  list.provider = 'preview';
+  return list;
 }
