@@ -1,7 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { RoomState, SecondaryPredictionKind } from '@who/shared';
+import {
+  DEFAULT_ROOM_SETTINGS,
+  RoomSettings,
+  RoomState,
+  SecondaryPredictionKind,
+  generateRandomNickname,
+} from '@who/shared';
 import { getSocket } from '@/lib/socket';
 
 import { Header } from '@/components/landing/Header';
@@ -9,11 +15,10 @@ import { LandingHero } from '@/components/landing/LandingHero';
 import { HowToPlayModal } from '@/components/landing/HowToPlayModal';
 
 import { RoomLobby } from '@/components/game/RoomLobby';
-import { TrackSelector } from '@/components/game/TrackSelector';
-import { BettingPhase } from '@/components/game/BettingPhase';
-import { RevealPhase } from '@/components/game/RevealPhase';
 import { GameOver } from '@/components/game/GameOver';
-import { LiveChat } from '@/components/chat/LiveChat';
+import { CreateRoomModal } from '@/components/game/CreateRoomModal';
+import { InstantIdentityInput } from '@/components/common/InstantIdentityInput';
+import { RoomSettingsConfig } from '@/components/game/RoomSettingsConfig';
 
 import { AVATAR_LIBRARY } from '@/lib/avatars';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
@@ -22,26 +27,52 @@ import { X, Headphones, LogIn, Sparkles } from 'lucide-react';
 export default function Home() {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [myPlayerId, setMyPlayerId] = useState<string>('');
-  const [nickname, setNickname] = useState('');
+  const [nickname, setNickname] = useState(() => generateRandomNickname());
+  const [isGeneratedNickname, setIsGeneratedNickname] = useState(true);
   const [avatar, setAvatar] = useState(AVATAR_LIBRARY[0].url);
-  const [alreadySubmittedTrack, setAlreadySubmittedTrack] = useState(false);
+  const [settings, setSettings] = useState<RoomSettings>(DEFAULT_ROOM_SETTINGS);
 
   // Modal states
   const [isHowToPlayOpen, setIsHowToPlayOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCode, setJoinCode] = useState('');
-  const [selectedMode, setSelectedMode] = useState<'classic' | 'turbo' | 'epic'>('classic');
   const [errorMessage, setErrorMessage] = useState('');
 
+  // Auto-reconnect session and detect direct room link on mount
   useEffect(() => {
     const socket = getSocket();
 
+    // Check for direct room code in URL query string (e.g. ?room=ABCD or ?code=ABCD)
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const codeFromUrl = urlParams.get('room') || urlParams.get('code');
+      if (codeFromUrl && codeFromUrl.length === 4) {
+        setJoinCode(codeFromUrl.toUpperCase());
+        setIsJoinModalOpen(true);
+      }
+
+      // Check for active existing session in localStorage
+      const savedPlayerId = localStorage.getItem('who_player_id');
+      const savedRoomCode = localStorage.getItem('who_room_code');
+      if (savedPlayerId && savedRoomCode) {
+        socket.emit(
+          'reconnect_session',
+          { roomCode: savedRoomCode, previousPlayerId: savedPlayerId },
+          (res: any) => {
+            if (res && res.success && res.room) {
+              setRoom(res.room);
+              setMyPlayerId(res.playerId);
+              localStorage.setItem('who_player_id', res.playerId);
+              localStorage.setItem('who_room_code', res.room.code);
+            }
+          }
+        );
+      }
+    }
+
     socket.on('room_updated', (updatedRoom: RoomState) => {
       setRoom(updatedRoom);
-      if (updatedRoom.phase === 'MUSIC_SELECTION') {
-        setAlreadySubmittedTrack(false);
-      }
     });
 
     socket.on('round_resolved', (data: { room: RoomState }) => {
@@ -54,18 +85,21 @@ export default function Home() {
     };
   }, []);
 
-  const handleCreateRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nickname.trim()) return setErrorMessage('Por favor, informe seu nickname!');
+  const handleCreateRoom = (nick: string, av: string, customSettings: RoomSettings) => {
+    if (!nick.trim()) return setErrorMessage('Por favor, informe seu apelido!');
 
     const socket = getSocket();
     socket.emit(
       'create_room',
-      { nickname, avatar, mode: selectedMode, totalRounds: selectedMode === 'turbo' ? 15 : 5 },
+      { nickname: nick.trim(), avatar: av, settings: customSettings },
       (res: any) => {
         if (res && res.success) {
           setRoom(res.room);
           setMyPlayerId(res.playerId);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('who_player_id', res.playerId);
+            localStorage.setItem('who_room_code', res.room.code);
+          }
           setIsCreateModalOpen(false);
         } else {
           setErrorMessage(res?.error || 'Erro ao criar sala');
@@ -76,17 +110,21 @@ export default function Home() {
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nickname.trim()) return setErrorMessage('Por favor, informe seu nickname!');
+    if (!nickname.trim()) return setErrorMessage('Por favor, informe seu apelido!');
     if (!joinCode.trim()) return setErrorMessage('Por favor, informe o código da sala!');
 
     const socket = getSocket();
     socket.emit(
       'join_room',
-      { roomCode: joinCode, nickname, avatar },
+      { roomCode: joinCode.trim().toUpperCase(), nickname: nickname.trim(), avatar },
       (res: any) => {
         if (res && res.success) {
           setRoom(res.room);
           setMyPlayerId(res.playerId);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('who_player_id', res.playerId);
+            localStorage.setItem('who_room_code', res.room.code);
+          }
           setIsJoinModalOpen(false);
         } else {
           setErrorMessage(res?.error || 'Erro ao entrar na sala');
@@ -116,7 +154,6 @@ export default function Home() {
     const socket = getSocket();
     socket.emit('submit_track', { roomCode: room.code, track }, (res: any) => {
       if (res && res.success) {
-        setAlreadySubmittedTrack(true);
         setRoom(res.room);
       }
     });
@@ -152,16 +189,24 @@ export default function Home() {
       'place_guesser_bet',
       { roomCode: room.code, targetOwnerId, chipAmount, predictionKind, targetPlayerIds, expectedCount },
       (res: any) => {
-        if (res && res.success) setRoom(res.room);
+        if (res && res.success && res.room) setRoom(res.room);
       }
     );
+  };
+
+  const handleSkipRevealStep = () => {
+    if (!room) return;
+    const socket = getSocket();
+    socket.emit('skip_reveal_step', { roomCode: room.code }, (res: any) => {
+      if (res && res.success && res.room) setRoom(res.room);
+    });
   };
 
   const handleResolveRound = () => {
     if (!room) return;
     const socket = getSocket();
     socket.emit('resolve_round', { roomCode: room.code }, (res: any) => {
-      if (res && res.success) setRoom(res.room);
+      if (res && res.success && res.room) setRoom(res.room);
     });
   };
 
@@ -169,7 +214,7 @@ export default function Home() {
     if (!room) return;
     const socket = getSocket();
     socket.emit('next_round', { roomCode: room.code }, (res: any) => {
-      if (res && res.success) setRoom(res.room);
+      if (res && res.success && res.room) setRoom(res.room);
     });
   };
 
@@ -182,8 +227,10 @@ export default function Home() {
 
         {(room.phase === 'LOBBY' ||
           room.phase === 'COUNTDOWN' ||
+          room.phase === 'PREPARATION' ||
           room.phase === 'MUSIC_SELECTION' ||
           room.phase === 'BETTING' ||
+          room.phase === 'BET_LOCKED' ||
           room.phase === 'REVEAL') && (
           <RoomLobby
             room={room}
@@ -195,6 +242,7 @@ export default function Home() {
             onPlaceGuesserBet={handlePlaceGuesserBet}
             onResolveRound={handleResolveRound}
             onNextRound={handleNextRound}
+            onSkipRevealStep={handleSkipRevealStep}
           />
         )}
 
@@ -226,109 +274,15 @@ export default function Home() {
       </div>
 
       {/* Create Room Modal */}
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="glass-card w-full max-w-md p-6 border-2 border-yellow-400/50 shadow-2xl relative">
-            <button
-              onClick={() => setIsCreateModalOpen(false)}
-              className="absolute top-4 right-4 p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-3 rounded-2xl bg-yellow-400 text-slate-950 shadow-glow-yellow">
-                <Headphones className="w-6 h-6" />
-              </div>
-              <h2 className="text-2xl font-black text-white">Criar Nova Sala</h2>
-            </div>
-
-            {errorMessage && (
-              <div className="p-3 mb-4 rounded-xl bg-red-500/20 border border-red-500 text-red-200 text-xs font-bold">
-                {errorMessage}
-              </div>
-            )}
-
-            <form onSubmit={handleCreateRoom} className="space-y-5">
-              <div>
-                <label className="block text-xs font-bold text-blue-200 uppercase mb-2">
-                  Seu Nickname:
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: DJ Master"
-                  value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white font-bold placeholder-blue-200/50 focus:outline-none focus:border-yellow-400"
-                  maxLength={20}
-                  required
-                />
-              </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-xs font-bold text-blue-200 uppercase">
-                      Escolha seu Avatar:
-                    </label>
-                    <span className="text-[10px] text-yellow-300 font-semibold flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" /> DiceBear Avatars
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-6 gap-2 max-h-40 overflow-y-auto pr-1 p-1.5 bg-slate-900/50 rounded-2xl border border-white/10">
-                    {AVATAR_LIBRARY.map((item) => {
-                      const isSelected = avatar === item.url;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => setAvatar(item.url)}
-                          className={`p-1 rounded-xl transition border flex items-center justify-center ${
-                            isSelected
-                              ? 'bg-yellow-400 border-yellow-200 scale-105 shadow-glow-yellow'
-                              : 'bg-white/10 border-white/10 hover:bg-white/20'
-                          }`}
-                          title={item.name}
-                        >
-                          <PlayerAvatar avatar={item.url} size="sm" />
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-              <div>
-                <label className="block text-xs font-bold text-blue-200 uppercase mb-2">
-                  Modo de Jogo:
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['classic', 'turbo', 'epic'] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setSelectedMode(mode)}
-                      className={`py-2 rounded-xl text-xs font-bold capitalize transition border ${
-                        selectedMode === mode
-                          ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
-                          : 'bg-white/10 text-white border-white/10'
-                      }`}
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-4 rounded-xl bg-gradient-button-yellow font-black text-slate-950 text-lg shadow-glow-yellow hover:scale-[1.01] transition"
-              >
-                CRIAR SALA
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
+      <CreateRoomModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSubmit={handleCreateRoom}
+        initialNickname={nickname}
+        initialAvatar={avatar}
+        initialSettings={settings}
+        errorMessage={errorMessage}
+      />
 
       {/* Join Room Modal */}
       {isJoinModalOpen && (
@@ -370,20 +324,15 @@ export default function Home() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-blue-200 uppercase mb-2">
-                  Seu Nickname:
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: RhythmRocker"
-                  value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white font-bold placeholder-blue-200/50 focus:outline-none focus:border-cyan-400"
-                  maxLength={20}
-                  required
-                />
-              </div>
+              <InstantIdentityInput
+                value={nickname}
+                onChange={(val, isAuto) => {
+                  setNickname(val);
+                  setIsGeneratedNickname(isAuto);
+                }}
+                isGenerated={isGeneratedNickname}
+                label="Seu Apelido"
+              />
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">

@@ -1,10 +1,20 @@
 import { z } from 'zod';
 
+export const roomSettingsSchema = z.object({
+  maxPlayers: z.number().int().min(2).max(12).default(8),
+  rounds: z.number().int().min(3).max(12).default(5),
+  bettingTimeSeconds: z.number().int().min(15).max(60).default(30),
+  startingChips: z.number().int().min(100).max(5000).default(1000),
+  clipDurationSeconds: z.number().int().min(10).max(60).default(30),
+  enableOwnerPrediction: z.boolean().default(true),
+  enableVibeCombo: z.boolean().default(true),
+  allowBots: z.boolean().default(true),
+});
+
 export const createRoomSchema = z.object({
-  nickname: z.string().min(2).max(16),
+  nickname: z.string().min(1).max(24),
   avatar: z.string(),
-  mode: z.enum(['classic', 'turbo', 'epic']).default('classic'),
-  totalRounds: z.number().min(3).max(10).default(5),
+  settings: roomSettingsSchema.optional(),
 });
 
 export const joinRoomSchema = z.object({

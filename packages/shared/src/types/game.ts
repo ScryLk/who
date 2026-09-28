@@ -1,12 +1,42 @@
-export type GameMode = 'classic' | 'turbo' | 'epic';
+export interface RoomSettings {
+  maxPlayers: number;
+  rounds: number;
+  bettingTimeSeconds: number;
+  startingChips: number;
+  clipDurationSeconds: number;
+  enableOwnerPrediction: boolean;
+  enableVibeCombo: boolean;
+  allowBots: boolean;
+}
+
+export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
+  maxPlayers: 8,
+  rounds: 5,
+  bettingTimeSeconds: 30,
+  startingChips: 1000,
+  clipDurationSeconds: 30,
+  enableOwnerPrediction: true,
+  enableVibeCombo: true,
+  allowBots: true,
+};
 
 export type GamePhase =
   | 'LOBBY'
   | 'COUNTDOWN'
+  | 'PREPARATION'
   | 'MUSIC_SELECTION'
   | 'BETTING'
+  | 'BET_LOCKED'
   | 'REVEAL'
   | 'GAME_OVER';
+
+export type RevealStage =
+  | 'INTRO'
+  | 'GUESSER_STEPPER'
+  | 'OWNER_REVEAL'
+  | 'OWNER_PREDICTION_REVEAL'
+  | 'SETTLEMENT'
+  | 'ROUND_SUMMARY';
 
 export type SecondaryPredictionKind =
   | 'SPECIFIC_PLAYERS'
@@ -26,6 +56,7 @@ export interface Track {
   isVideo?: boolean;
   youtubeId?: string;
   startTimeSeconds?: number;
+  endTimeSeconds?: number;
 }
 
 export interface Player {
@@ -108,7 +139,7 @@ export interface RoomOptions {
 export interface RoomState {
   code: string;
   hostId: string;
-  mode: GameMode;
+  settings: RoomSettings;
   phase: GamePhase;
   currentRound: number;
   totalRounds: number;
@@ -125,6 +156,11 @@ export interface RoomState {
   lastRoundResult?: RoundResult;
   chatMessages: ChatMessage[];
   options?: RoomOptions;
+  revealStage?: RevealStage;
+  revealIndex?: number;
+  revealOrder?: string[];
+  betLockedAt?: number;
+  startingBalances?: Record<string, number>;
 }
 
 export interface OddsInfo {

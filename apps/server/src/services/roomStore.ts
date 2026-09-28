@@ -1,23 +1,27 @@
 import {
   ChatMessage,
-  GameMode,
+  DEFAULT_ROOM_SETTINGS,
   GuesserBet,
   OwnerBet,
   Player,
   RoomOptions,
+  RoomSettings,
   RoomState,
   SecondaryPredictionKind,
   Track,
   calculateRoundResolution,
+  createRevealOrder,
+  generateUniqueNickname,
 } from '@who/shared';
 import { FEATURED_CATALOG } from './musicService';
+import { redisRoomStore } from './redisStore';
 
 const BOT_NAMES = ['DJ MixMaster', 'BeatsHunter', 'SoundWizard', 'MelodyQueen', 'RhythmRocker'];
 const BOT_AVATARS = [
   'https://api.dicebear.com/7.x/bottts/svg?seed=DJMixMaster&backgroundColor=facc15',
-  'https://api.dicebear.com/7.x/fun-emoji/svg?seed=BeatsHunter&backgroundColor=ec4899',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=BeatsHunter&backgroundColor=ec4899',
   'https://api.dicebear.com/7.x/bottts/svg?seed=SoundWizard&backgroundColor=8b5cf6',
-  'https://api.dicebear.com/7.x/fun-emoji/svg?seed=MelodyQueen&backgroundColor=06b6d4',
+  'https://api.dicebear.com/7.x/adventurer/svg?seed=MelodyQueen&backgroundColor=06b6d4',
   'https://api.dicebear.com/7.x/adventurer/svg?seed=RhythmRocker&backgroundColor=10b981',
 ];
 
@@ -40,12 +44,15 @@ class RoomStore {
     hostId: string,
     hostNickname: string,
     avatar: string,
-    mode: GameMode = 'classic',
-    totalRounds: number = 5,
+    customSettings?: Partial<RoomSettings>,
     options?: RoomOptions
   ): RoomState {
     const code = this.generateRoomCode();
-    const startingChips = options?.startingChips || 1000;
+    const settings: RoomSettings = {
+      ...DEFAULT_ROOM_SETTINGS,
+      ...customSettings,
+    };
+    const startingChips = settings.startingChips;
     const hostPlayer: Player = {
       id: hostId,
       nickname: hostNickname,
@@ -56,30 +63,23 @@ class RoomStore {
       isReady: true,
     };
 
-    const bettingDuration = options?.bettingDurationSeconds || (mode === 'turbo' ? 15 : 30);
-    const turnDuration = options?.turnDurationSeconds || 50;
-
-    const roomOptions: RoomOptions = {
-      turnDurationSeconds: turnDuration,
-      bettingDurationSeconds: bettingDuration,
-      startingChips,
-      genreFilter: options?.genreFilter || 'all',
-    };
+    const bettingDuration = settings.bettingTimeSeconds;
+    const turnDuration = 45;
 
     const room: RoomState = {
       code,
       hostId,
-      mode,
+      settings,
       phase: 'LOBBY',
       currentRound: 1,
-      totalRounds,
+      totalRounds: settings.rounds,
       roundDurationSeconds: bettingDuration,
       timeRemainingSeconds: bettingDuration,
       turnTimeRemainingSeconds: turnDuration,
       players: [hostPlayer],
       submittedTracks: [],
       guesserBets: {},
-      options: roomOptions,
+      options,
       chatMessages: [
         {
           id: 'sys-1',
@@ -93,6 +93,27 @@ class RoomStore {
     };
 
     this.rooms.set(code, room);
+    redisRoomStore.saveRoom(room).catch(() => {});
+    return room;
+  }
+
+  updateRoomSettings(code: string, newSettings: Partial<RoomSettings>): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+    room.settings = { ...room.settings, ...newSettings };
+    if (newSettings.rounds) {
+      room.totalRounds = newSettings.rounds;
+    }
+    if (newSettings.bettingTimeSeconds) {
+      room.roundDurationSeconds = newSettings.bettingTimeSeconds;
+      room.timeRemainingSeconds = newSettings.bettingTimeSeconds;
+    }
+    if (newSettings.startingChips) {
+      room.players.forEach((p) => {
+        p.chips = newSettings.startingChips!;
+      });
+    }
+    redisRoomStore.saveRoom(room).catch(() => {});
     return room;
   }
 
@@ -103,15 +124,18 @@ class RoomStore {
     if (options.bettingDurationSeconds) {
       room.roundDurationSeconds = options.bettingDurationSeconds;
       room.timeRemainingSeconds = options.bettingDurationSeconds;
+      room.settings.bettingTimeSeconds = options.bettingDurationSeconds;
     }
     if (options.turnDurationSeconds) {
       room.turnTimeRemainingSeconds = options.turnDurationSeconds;
     }
     if (options.startingChips) {
+      room.settings.startingChips = options.startingChips;
       room.players.forEach((p) => {
         p.chips = options.startingChips!;
       });
     }
+    redisRoomStore.saveRoom(room).catch(() => {});
     return room;
   }
 
@@ -131,23 +155,30 @@ class RoomStore {
     if (room.phase !== 'LOBBY') {
       return { error: 'A partida já começou nesta sala!' };
     }
-    if (room.players.length >= 12) {
-      return { error: 'A sala está cheia (máximo 12 jogadores)!' };
+    const max = room.settings?.maxPlayers || 12;
+    if (room.players.length >= max) {
+      return { error: `A sala está cheia (máximo ${max} jogadores)!` };
     }
 
     const existing = room.players.find((p) => p.id === playerId);
     if (!existing) {
+      // Deduplicate nickname
+      const existingNicknames = room.players.map((p) => p.nickname);
+      const isDuplicate = existingNicknames.some((n) => n.toLowerCase() === nickname.toLowerCase().trim());
+      const finalNickname = isDuplicate ? generateUniqueNickname(existingNicknames) : nickname.trim();
+
       const newPlayer: Player = {
         id: playerId,
-        nickname,
+        nickname: finalNickname,
         avatar: avatar || 'party-2',
-        chips: 1000,
+        chips: room.settings?.startingChips || 1000,
         isHost: false,
         isBot: false,
         isReady: false,
       };
       room.players.push(newPlayer);
-      this.addChatMessage(room.code, 'SYSTEM', 'WHO Bot', `${nickname} entrou na sala!`, true);
+      this.addChatMessage(room.code, 'SYSTEM', 'WHO Bot', `${finalNickname} entrou na sala!`, true);
+      redisRoomStore.saveRoom(room).catch(() => {});
     }
 
     return { room };
@@ -160,12 +191,14 @@ class RoomStore {
     if (player) {
       player.isReady = isReady;
     }
+    redisRoomStore.saveRoom(room).catch(() => {});
     return room;
   }
 
   addBotPlayer(code: string): RoomState | undefined {
     const room = this.getRoom(code);
-    if (!room || room.players.length >= 12) return undefined;
+    const max = room?.settings?.maxPlayers || 12;
+    if (!room || room.players.length >= max) return undefined;
 
     const botCount = room.players.filter((p) => p.isBot).length;
     const botIndex = botCount % BOT_NAMES.length;
@@ -175,7 +208,7 @@ class RoomStore {
       id: botId,
       nickname: `${BOT_NAMES[botIndex]}`,
       avatar: BOT_AVATARS[botIndex],
-      chips: 1000,
+      chips: room.settings?.startingChips || 1000,
       isHost: false,
       isBot: true,
       isReady: true,
@@ -183,6 +216,7 @@ class RoomStore {
 
     room.players.push(botPlayer);
     this.addChatMessage(room.code, 'SYSTEM', 'WHO Bot', `${botPlayer.nickname} (Bot) entrou na sala!`, true);
+    redisRoomStore.saveRoom(room).catch(() => {});
     return room;
   }
 
@@ -356,8 +390,20 @@ class RoomStore {
     room.totalRounds = Math.max(room.totalRounds, room.submittedTracks.length);
     room.currentRound = 1;
     room.phase = 'BETTING';
-    const duration = room.options?.bettingDurationSeconds || (room.mode === 'turbo' ? 15 : 30);
+    const duration = room.settings?.bettingTimeSeconds || 30;
+    room.roundDurationSeconds = duration;
     room.timeRemainingSeconds = duration;
+
+    // Record pre-bet starting balances for risk calculations
+    room.startingBalances = {};
+    room.players.forEach((p) => {
+      room.startingBalances![p.id] = p.chips;
+    });
+    room.revealStage = undefined;
+    room.revealIndex = undefined;
+    room.revealOrder = undefined;
+    room.betLockedAt = undefined;
+    delete room.lastRoundResult;
 
     // Pick first track for round 1
     room.currentTrack = room.submittedTracks[0];
@@ -415,12 +461,16 @@ class RoomStore {
     if (!room || !room.currentTrack) return undefined;
     if (room.currentTrack.submittedByPlayerId !== ownerId) return undefined;
 
+    const player = room.players.find((p) => p.id === ownerId);
+    const startingBalance = room.startingBalances?.[ownerId] ?? player?.chips ?? 0;
+    const validatedChipAmount = Math.max(0, Math.min(chipAmount, startingBalance));
+
     room.ownerBet = {
       ownerId,
       predictionKind,
       targetPlayerIds,
       expectedCount,
-      chipAmount,
+      chipAmount: validatedChipAmount,
     };
     return room;
   }
@@ -433,9 +483,34 @@ class RoomStore {
     predictionKind?: SecondaryPredictionKind,
     targetPlayerIds?: string[],
     expectedCount?: number
-  ): RoomState | undefined {
+  ): {
+    room?: RoomState;
+    accepted: boolean;
+    code?: 'INSUFFICIENT_CHIPS' | 'INVALID_BET' | 'ROOM_NOT_FOUND' | 'PHASE_CLOSED' | 'PLAYER_NOT_FOUND';
+    stake?: number;
+    remainingBalance?: number;
+    error?: string;
+  } {
     const room = this.getRoom(code);
-    if (!room) return undefined;
+    if (!room) return { accepted: false, code: 'ROOM_NOT_FOUND', error: 'Sala não encontrada.' };
+    if (room.phase !== 'BETTING' || (room.timeRemainingSeconds ?? 0) <= 0) {
+      return { accepted: false, code: 'PHASE_CLOSED', error: 'Apostas encerradas para esta rodada.' };
+    }
+
+    const player = room.players.find((p) => p.id === guesserId);
+    if (!player) return { accepted: false, code: 'PLAYER_NOT_FOUND', error: 'Jogador não encontrado.' };
+
+    const startingBalance = room.startingBalances?.[guesserId] ?? player.chips;
+    if (chipAmount <= 0) {
+      return { accepted: false, code: 'INVALID_BET', error: 'O valor da aposta deve ser maior que zero.' };
+    }
+    if (chipAmount > startingBalance) {
+      return {
+        accepted: false,
+        code: 'INSUFFICIENT_CHIPS',
+        error: `Saldo insuficiente. Você possui ${startingBalance} fichas.`,
+      };
+    }
 
     const bet: GuesserBet = {
       guesserId,
@@ -446,15 +521,101 @@ class RoomStore {
       chipAmount,
     };
     room.guesserBets[guesserId] = bet;
+
+    return {
+      room,
+      accepted: true,
+      stake: chipAmount,
+      remainingBalance: startingBalance - chipAmount,
+    };
+  }
+
+  lockBets(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room || room.phase !== 'BETTING') return room;
+
+    room.phase = 'BET_LOCKED';
+    room.timeRemainingSeconds = 3;
+    room.betLockedAt = Date.now();
+    room.revealStage = 'INTRO';
+    room.revealIndex = 0;
+    room.revealOrder = createRevealOrder(room.guesserBets, room.players, room.startingBalances);
+
+    this.addChatMessage(
+      room.code,
+      'SYSTEM',
+      'WHO Bot',
+      'Apostas fechadas! Nenhuma aposta pode ser alterada. Preparando revelação...',
+      true
+    );
+
     return room;
   }
 
-  resolveRound(code: string): RoomState | undefined {
+  startRevealSequence(code: string): RoomState | undefined {
     const room = this.getRoom(code);
-    if (!room || !room.currentTrack) return undefined;
+    if (!room) return undefined;
 
     room.phase = 'REVEAL';
-    room.timeRemainingSeconds = 10;
+    if (room.revealOrder && room.revealOrder.length > 0) {
+      room.revealStage = 'GUESSER_STEPPER';
+      room.revealIndex = 0;
+      room.timeRemainingSeconds = room.revealOrder.length > 6 ? 2 : 3;
+    } else {
+      room.revealStage = 'OWNER_REVEAL';
+      room.timeRemainingSeconds = 4;
+    }
+
+    return room;
+  }
+
+  advanceRevealStep(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room || room.phase !== 'REVEAL') return room;
+
+    if (room.revealStage === 'INTRO') {
+      if (room.revealOrder && room.revealOrder.length > 0) {
+        room.revealStage = 'GUESSER_STEPPER';
+        room.revealIndex = 0;
+        room.timeRemainingSeconds = room.revealOrder.length > 6 ? 2 : 3;
+      } else {
+        room.revealStage = 'OWNER_REVEAL';
+        room.timeRemainingSeconds = 4;
+      }
+    } else if (room.revealStage === 'GUESSER_STEPPER') {
+      const currentIdx = room.revealIndex ?? 0;
+      const totalSteps = room.revealOrder?.length ?? 0;
+      if (currentIdx + 1 < totalSteps) {
+        room.revealIndex = currentIdx + 1;
+        room.timeRemainingSeconds = totalSteps > 6 ? 2 : 3;
+      } else {
+        room.revealStage = 'OWNER_REVEAL';
+        room.timeRemainingSeconds = 4;
+        this.addChatMessage(room.code, 'SYSTEM', 'WHO Bot', 'Quem escolheu esta música?', true);
+      }
+    } else if (room.revealStage === 'OWNER_REVEAL') {
+      if (room.settings?.enableOwnerPrediction && room.ownerBet) {
+        room.revealStage = 'OWNER_PREDICTION_REVEAL';
+        room.timeRemainingSeconds = 4;
+      } else {
+        this.performSettlement(room);
+        room.revealStage = 'SETTLEMENT';
+        room.timeRemainingSeconds = 5;
+      }
+    } else if (room.revealStage === 'OWNER_PREDICTION_REVEAL') {
+      this.performSettlement(room);
+      room.revealStage = 'SETTLEMENT';
+      room.timeRemainingSeconds = 5;
+    } else if (room.revealStage === 'SETTLEMENT') {
+      room.revealStage = 'ROUND_SUMMARY';
+      room.timeRemainingSeconds = 10;
+    }
+
+    return room;
+  }
+
+  performSettlement(room: RoomState): void {
+    if (room.lastRoundResult || !room.currentTrack) return;
 
     const guesserBetsList = Object.values(room.guesserBets);
     const result = calculateRoundResolution(
@@ -480,9 +641,19 @@ class RoomStore {
       room.code,
       'SYSTEM',
       'WHO Bot',
-      `Fim da rodada ${room.currentRound}! Revelando o dono e distribuindo fichas...`,
+      `Fim da rodada ${room.currentRound}! Fichas distribuídas com sucesso.`,
       true
     );
+  }
+
+  resolveRound(code: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room || !room.currentTrack) return undefined;
+
+    this.performSettlement(room);
+    room.phase = 'REVEAL';
+    room.revealStage = 'ROUND_SUMMARY';
+    room.timeRemainingSeconds = 10;
 
     return room;
   }
@@ -503,10 +674,22 @@ class RoomStore {
     room.currentTrack = room.submittedTracks[nextTrackIndex];
 
     room.phase = 'BETTING';
-    const duration = room.options?.bettingDurationSeconds || (room.mode === 'turbo' ? 15 : 30);
+    const duration = room.settings?.bettingTimeSeconds || 30;
+    room.roundDurationSeconds = duration;
     room.timeRemainingSeconds = duration;
     room.guesserBets = {};
     delete room.ownerBet;
+
+    // Record pre-bet starting balances for risk calculations
+    room.startingBalances = {};
+    room.players.forEach((p) => {
+      room.startingBalances![p.id] = p.chips;
+    });
+    room.revealStage = undefined;
+    room.revealIndex = undefined;
+    room.revealOrder = undefined;
+    room.betLockedAt = undefined;
+    delete room.lastRoundResult;
 
     // Setup bot bets for this round
     const ownerId = room.currentTrack.submittedByPlayerId;
@@ -562,6 +745,118 @@ class RoomStore {
       room.chatMessages.shift();
     }
     return msg;
+  }
+
+  /**
+   * Returns a sanitized room state for a specific player,
+   * shielding secret track submissions, owner identities and other players' bets during BETTING, BET_LOCKED and early REVEAL stages.
+   */
+  getSanitizedRoomState(code: string, forPlayerId: string): RoomState | undefined {
+    const room = this.getRoom(code);
+    if (!room) return undefined;
+
+    // During LOBBY and GAME_OVER, full state can be displayed
+    if (room.phase === 'LOBBY' || room.phase === 'GAME_OVER') {
+      return room;
+    }
+
+    const isOwner = room.currentTrack?.submittedByPlayerId === forPlayerId;
+
+    // 1. Secret Track Owner masking:
+    // Revealed ONLY in OWNER_REVEAL, OWNER_PREDICTION_REVEAL, SETTLEMENT, ROUND_SUMMARY
+    const shouldRevealOwner =
+      room.phase === 'REVEAL' &&
+      (room.revealStage === 'OWNER_REVEAL' ||
+        room.revealStage === 'OWNER_PREDICTION_REVEAL' ||
+        room.revealStage === 'SETTLEMENT' ||
+        room.revealStage === 'ROUND_SUMMARY');
+
+    const sanitizedCurrentTrack = room.currentTrack
+      ? {
+          ...room.currentTrack,
+          submittedByPlayerId: shouldRevealOwner || isOwner ? room.currentTrack.submittedByPlayerId : 'SECRET_OWNER',
+        }
+      : undefined;
+
+    const sanitizedSubmittedTracks = room.submittedTracks.map((t) => ({
+      ...t,
+      submittedByPlayerId:
+        shouldRevealOwner || t.submittedByPlayerId === forPlayerId ? t.submittedByPlayerId : 'SECRET_OWNER',
+    }));
+
+    // 2. Guesser Bets masking:
+    const sanitizedGuesserBets: Record<string, GuesserBet> = {};
+
+    if (
+      room.phase === 'BETTING' ||
+      room.phase === 'BET_LOCKED' ||
+      (room.phase === 'REVEAL' && room.revealStage === 'INTRO')
+    ) {
+      // In BETTING, BET_LOCKED, and INTRO:
+      // Player sees their own bet.
+      // Other players' bets are masked to { guesserId: pId, targetOwnerId: '', chipAmount: 0 }
+      // so clients can display "APOSTOU" vs "PENSANDO" without leaking target or stake.
+      Object.keys(room.guesserBets).forEach((pId) => {
+        if (pId === forPlayerId) {
+          sanitizedGuesserBets[pId] = room.guesserBets[pId];
+        } else {
+          sanitizedGuesserBets[pId] = {
+            guesserId: pId,
+            targetOwnerId: '',
+            chipAmount: 0,
+          };
+        }
+      });
+    } else if (room.phase === 'REVEAL' && room.revealStage === 'GUESSER_STEPPER') {
+      // In GUESSER_STEPPER:
+      // Bets of players up to room.revealIndex in room.revealOrder are revealed (who & how much)!
+      const revealedIds = new Set(
+        (room.revealOrder || []).slice(0, (room.revealIndex ?? 0) + 1)
+      );
+      Object.keys(room.guesserBets).forEach((pId) => {
+        if (revealedIds.has(pId) || pId === forPlayerId) {
+          sanitizedGuesserBets[pId] = room.guesserBets[pId];
+        } else {
+          sanitizedGuesserBets[pId] = {
+            guesserId: pId,
+            targetOwnerId: '',
+            chipAmount: 0,
+          };
+        }
+      });
+    } else {
+      // OWNER_REVEAL, OWNER_PREDICTION_REVEAL, SETTLEMENT, ROUND_SUMMARY:
+      // All bets are fully visible!
+      Object.assign(sanitizedGuesserBets, room.guesserBets);
+    }
+
+    // 3. Owner Bet masking:
+    // Only actual owner can see it until OWNER_PREDICTION_REVEAL, SETTLEMENT, ROUND_SUMMARY
+    const shouldRevealOwnerBet =
+      isOwner ||
+      (room.phase === 'REVEAL' &&
+        (room.revealStage === 'OWNER_PREDICTION_REVEAL' ||
+          room.revealStage === 'SETTLEMENT' ||
+          room.revealStage === 'ROUND_SUMMARY'));
+
+    const sanitizedOwnerBet = shouldRevealOwnerBet ? room.ownerBet : undefined;
+
+    // 4. lastRoundResult masking:
+    // Sent ONLY in SETTLEMENT and ROUND_SUMMARY!
+    const shouldSendRoundResult =
+      room.phase === 'REVEAL' &&
+      (room.revealStage === 'SETTLEMENT' || room.revealStage === 'ROUND_SUMMARY');
+
+    const sanitizedLastRoundResult = shouldSendRoundResult ? room.lastRoundResult : undefined;
+
+    return {
+      ...room,
+      currentTrack: sanitizedCurrentTrack,
+      submittedTracks: sanitizedSubmittedTracks,
+      guesserBets: sanitizedGuesserBets,
+      ownerBet: sanitizedOwnerBet,
+      lastRoundResult: sanitizedLastRoundResult,
+    };
   }
 }
 

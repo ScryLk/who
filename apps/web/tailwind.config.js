@@ -38,6 +38,7 @@ module.exports = {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'bounce-subtle': 'bounceSubtle 2s infinite',
         'float': 'float 4s ease-in-out infinite',
+        'shake': 'shake 250ms ease-in-out',
       },
       keyframes: {
         bounceSubtle: {
@@ -47,6 +48,11 @@ module.exports = {
         float: {
           '0%, 100%': { transform: 'translateY(0px) rotate(0deg)' },
           '50%': { transform: 'translateY(-10px) rotate(3deg)' },
+        },
+        shake: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '20%, 60%': { transform: 'translateX(-6px)' },
+          '40%, 80%': { transform: 'translateX(6px)' },
         },
       },
     },

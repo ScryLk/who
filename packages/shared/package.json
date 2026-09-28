@@ -19,6 +19,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "devDependencies": {
+    "@types/node": "^20.12.12",
     "@who/config-typescript": "workspace:*",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5"

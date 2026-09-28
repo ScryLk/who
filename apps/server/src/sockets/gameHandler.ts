@@ -3,7 +3,21 @@ import { roomStore } from '../services/roomStore';
 import { searchTracks } from '../services/musicService';
 
 export function setupSocketHandlers(io: Server) {
-  // 1-second Room Timer Interval for COUNTDOWN and MUSIC_SELECTION turns
+  // Helper to safely broadcast room state without leaking secrets
+  function broadcastRoomState(room: any) {
+    if (!room) return;
+    const roomSockets = io.sockets.adapter.rooms.get(room.code);
+    if (roomSockets) {
+      for (const sId of roomSockets) {
+        const sanitized = roomStore.getSanitizedRoomState(room.code, sId) || room;
+        io.to(sId).emit('room_updated', sanitized);
+      }
+    } else {
+      io.to(room.code).emit('room_updated', room);
+    }
+  }
+
+  // 1-second Room Timer Interval for COUNTDOWN, MUSIC_SELECTION, BETTING, BET_LOCKED, REVEAL
   setInterval(() => {
     const rooms = roomStore.getAllRooms();
     rooms.forEach((room) => {
@@ -12,37 +26,49 @@ export function setupSocketHandlers(io: Server) {
         if (room.timeRemainingSeconds <= 0) {
           roomStore.startTurnSequence(room.code);
         }
-        io.to(room.code).emit('room_updated', room);
+        broadcastRoomState(room);
       } else if (room.phase === 'MUSIC_SELECTION') {
         const currentTurnPlayer = room.players.find((p) => p.id === room.currentTurnPlayerId);
         if (currentTurnPlayer?.isBot) {
           const updated = roomStore.handleBotTurnIfActive(room.code);
-          io.to(room.code).emit('room_updated', updated || room);
+          broadcastRoomState(updated || room);
         } else {
           room.turnTimeRemainingSeconds = (room.turnTimeRemainingSeconds ?? 50) - 1;
           if (room.turnTimeRemainingSeconds <= 0) {
             const updated = roomStore.advanceTurn(room.code);
-            io.to(room.code).emit('room_updated', updated || room);
+            broadcastRoomState(updated || room);
           } else {
-            io.to(room.code).emit('room_updated', room);
+            broadcastRoomState(room);
           }
         }
       } else if (room.phase === 'BETTING') {
         room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 30) - 1;
         if (room.timeRemainingSeconds <= 0) {
-          const resRoom = roomStore.resolveRound(room.code);
-          if (resRoom && resRoom.lastRoundResult) {
-            io.to(room.code).emit('round_resolved', { room: resRoom, result: resRoom.lastRoundResult });
-          }
-        }
-        io.to(room.code).emit('room_updated', room);
-      } else if (room.phase === 'REVEAL') {
-        room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 10) - 1;
-        if (room.timeRemainingSeconds <= 0) {
-          const nextRoom = roomStore.nextRound(room.code);
-          io.to(room.code).emit('room_updated', nextRoom);
+          const lockedRoom = roomStore.lockBets(room.code);
+          broadcastRoomState(lockedRoom || room);
         } else {
-          io.to(room.code).emit('room_updated', room);
+          broadcastRoomState(room);
+        }
+      } else if (room.phase === 'BET_LOCKED') {
+        room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 3) - 1;
+        if (room.timeRemainingSeconds <= 0) {
+          const revealRoom = roomStore.startRevealSequence(room.code);
+          broadcastRoomState(revealRoom || room);
+        } else {
+          broadcastRoomState(room);
+        }
+      } else if (room.phase === 'REVEAL') {
+        room.timeRemainingSeconds = (room.timeRemainingSeconds ?? 3) - 1;
+        if (room.timeRemainingSeconds <= 0) {
+          if (room.revealStage === 'ROUND_SUMMARY') {
+            const nextRoom = roomStore.nextRound(room.code);
+            broadcastRoomState(nextRoom || room);
+          } else {
+            const advanced = roomStore.advanceRevealStep(room.code);
+            broadcastRoomState(advanced || room);
+          }
+        } else {
+          broadcastRoomState(room);
         }
       }
     });
@@ -62,31 +88,57 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // Create Room
-    socket.on('create_room', (data: { nickname: string; avatar: string; mode?: any; totalRounds?: number; options?: any }, callback) => {
+    socket.on(
+      'create_room',
+      (
+        data: {
+          nickname: string;
+          avatar: string;
+          settings?: any;
+          totalRounds?: number;
+          options?: any;
+        },
+        callback
+      ) => {
+        try {
+          const room = roomStore.createRoom(
+            socket.id,
+            data.nickname,
+            data.avatar,
+            data.settings,
+            data.options
+          );
+          socket.join(room.code);
+          callback({ success: true, room, playerId: socket.id });
+          broadcastRoomState(room);
+        } catch (err: any) {
+          callback({ success: false, error: err.message });
+        }
+      }
+    );
+
+    // Update Room Settings
+    socket.on('update_room_settings', (data: { roomCode: string; settings: any }, callback) => {
       try {
-        const room = roomStore.createRoom(
-          socket.id,
-          data.nickname,
-          data.avatar,
-          data.mode || 'classic',
-          data.totalRounds || 5,
-          data.options
-        );
-        socket.join(room.code);
-        callback({ success: true, room, playerId: socket.id });
-        io.to(room.code).emit('room_updated', room);
+        const room = roomStore.updateRoomSettings(data.roomCode, data.settings);
+        if (room) {
+          if (typeof callback === 'function') callback({ success: true, room });
+          broadcastRoomState(room);
+        } else {
+          if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada.' });
+        }
       } catch (err: any) {
-        callback({ success: false, error: err.message });
+        if (typeof callback === 'function') callback({ success: false, error: err.message });
       }
     });
 
-    // Update Room Options
+    // Update Room Options (Backward compatibility)
     socket.on('update_room_options', (data: { roomCode: string; options: any }, callback) => {
       try {
         const room = roomStore.updateRoomOptions(data.roomCode, data.options);
         if (room) {
           if (typeof callback === 'function') callback({ success: true, room });
-          io.to(room.code).emit('room_updated', room);
+          broadcastRoomState(room);
         } else {
           if (typeof callback === 'function') callback({ success: false, error: 'Sala não encontrada.' });
         }
@@ -104,16 +156,45 @@ export function setupSocketHandlers(io: Server) {
         }
         const existingPlayer = room.players.find((p) => p.id === data.previousPlayerId);
         if (existingPlayer) {
-          existingPlayer.id = socket.id;
-          if (room.hostId === data.previousPlayerId) {
-            room.hostId = socket.id;
+          const prevId = data.previousPlayerId;
+          const newId = socket.id;
+
+          // Reassign player identity safely across all room registries
+          existingPlayer.id = newId;
+
+          if (room.hostId === prevId) {
+            room.hostId = newId;
           }
-          if (room.currentTurnPlayerId === data.previousPlayerId) {
-            room.currentTurnPlayerId = socket.id;
+          if (room.currentTurnPlayerId === prevId) {
+            room.currentTurnPlayerId = newId;
           }
+
+          // Transfer submitted tracks
+          room.submittedTracks.forEach((t) => {
+            if (t.submittedByPlayerId === prevId) {
+              t.submittedByPlayerId = newId;
+            }
+          });
+          if (room.currentTrack && room.currentTrack.submittedByPlayerId === prevId) {
+            room.currentTrack.submittedByPlayerId = newId;
+          }
+
+          // Transfer bets
+          if (room.guesserBets[prevId]) {
+            room.guesserBets[newId] = {
+              ...room.guesserBets[prevId],
+              guesserId: newId,
+            };
+            delete room.guesserBets[prevId];
+          }
+          if (room.ownerBet && room.ownerBet.ownerId === prevId) {
+            room.ownerBet.ownerId = newId;
+          }
+
           socket.join(room.code);
-          if (typeof callback === 'function') callback({ success: true, room, playerId: socket.id });
-          io.to(room.code).emit('room_updated', room);
+          const sanitized = roomStore.getSanitizedRoomState(room.code, newId) || room;
+          if (typeof callback === 'function') callback({ success: true, room: sanitized, playerId: newId });
+          broadcastRoomState(room);
         } else {
           if (typeof callback === 'function') callback({ success: false, error: 'Jogador não encontrado na sala.' });
         }
@@ -131,7 +212,7 @@ export function setupSocketHandlers(io: Server) {
         }
         socket.join(result.room.code);
         callback({ success: true, room: result.room, playerId: socket.id });
-        io.to(result.room.code).emit('room_updated', result.room);
+        broadcastRoomState(result.room);
       } catch (err: any) {
         callback({ success: false, error: err.message });
       }
@@ -142,18 +223,22 @@ export function setupSocketHandlers(io: Server) {
       const room = roomStore.setPlayerReady(data.roomCode, socket.id, data.isReady);
       if (room) {
         if (typeof callback === 'function') callback({ success: true, room });
-        io.to(room.code).emit('room_updated', room);
+        broadcastRoomState(room);
       } else {
         if (typeof callback === 'function') callback({ success: false, error: 'Erro ao atualizar prontidão.' });
       }
     });
 
-    // Add Bot Player
+    // Add Bot Player (Host only)
     socket.on('add_bot', (data: { roomCode: string }, callback) => {
-      const room = roomStore.addBotPlayer(data.roomCode);
-      if (room) {
-        callback({ success: true, room });
-        io.to(room.code).emit('room_updated', room);
+      const room = roomStore.getRoom(data.roomCode);
+      if (!room || room.hostId !== socket.id) {
+        return callback({ success: false, error: 'Apenas o líder pode adicionar bots.' });
+      }
+      const updated = roomStore.addBotPlayer(data.roomCode);
+      if (updated) {
+        callback({ success: true, room: updated });
+        broadcastRoomState(updated);
       } else {
         callback({ success: false, error: 'Não foi possível adicionar bot.' });
       }
@@ -161,10 +246,14 @@ export function setupSocketHandlers(io: Server) {
 
     // Start Game (Host only)
     socket.on('start_game', (data: { roomCode: string }, callback) => {
-      const room = roomStore.startMusicSelection(data.roomCode);
-      if (room) {
-        callback({ success: true, room });
-        io.to(room.code).emit('room_updated', room);
+      const room = roomStore.getRoom(data.roomCode);
+      if (!room || room.hostId !== socket.id) {
+        return callback({ success: false, error: 'Apenas o líder pode iniciar a partida.' });
+      }
+      const updated = roomStore.startMusicSelection(data.roomCode);
+      if (updated) {
+        callback({ success: true, room: updated });
+        broadcastRoomState(updated);
       } else {
         callback({ success: false, error: 'Erro ao iniciar o jogo.' });
       }
@@ -175,13 +264,13 @@ export function setupSocketHandlers(io: Server) {
       const room = roomStore.submitTrack(data.roomCode, socket.id, data.track);
       if (room) {
         callback({ success: true, room });
-        io.to(room.code).emit('room_updated', room);
+        broadcastRoomState(room);
       } else {
         callback({ success: false, error: 'Erro ao enviar música.' });
       }
     });
 
-    // Place Owner Bet & Category
+    // Place Owner Bet
     socket.on(
       'place_owner_bet',
       (
@@ -203,15 +292,16 @@ export function setupSocketHandlers(io: Server) {
           data.expectedCount
         );
         if (room) {
-          callback({ success: true, room });
-          io.to(room.code).emit('room_updated', room);
+          const sanitized = roomStore.getSanitizedRoomState(data.roomCode, socket.id);
+          callback({ success: true, room: sanitized });
+          broadcastRoomState(room);
         } else {
           callback({ success: false, error: 'Erro ao registrar aposta do dono.' });
         }
       }
     );
 
-    // Place Guesser Bet
+    // Place Guesser Bet (ACK returns only acceptance and balance; no outcome leak)
     socket.on(
       'place_guesser_bet',
       (
@@ -225,7 +315,7 @@ export function setupSocketHandlers(io: Server) {
         },
         callback
       ) => {
-        const room = roomStore.placeGuesserBet(
+        const betResult = roomStore.placeGuesserBet(
           data.roomCode,
           socket.id,
           data.targetOwnerId,
@@ -234,43 +324,84 @@ export function setupSocketHandlers(io: Server) {
           data.targetPlayerIds,
           data.expectedCount
         );
-        if (room) {
-          callback({ success: true, room });
-          io.to(room.code).emit('room_updated', room);
+
+        if (betResult && betResult.room) {
+          const sanitized = roomStore.getSanitizedRoomState(data.roomCode, socket.id);
+          callback({
+            success: true,
+            accepted: true,
+            stake: betResult.stake,
+            remainingBalance: betResult.remainingBalance,
+            room: sanitized,
+          });
+          broadcastRoomState(betResult.room);
+
+          // Check if all non-owner players have placed their bets -> auto trigger BET_LOCKED
+          const ownerId = betResult.room.currentTrack?.submittedByPlayerId;
+          const guesserPlayers = betResult.room.players.filter((p) => p.id !== ownerId);
+          const allGuessed = guesserPlayers.length > 0 && guesserPlayers.every(
+            (p) => betResult.room!.guesserBets[p.id] !== undefined
+          );
+
+          if (allGuessed && betResult.room.phase === 'BETTING') {
+            const lockedRoom = roomStore.lockBets(betResult.room.code);
+            if (lockedRoom) {
+              broadcastRoomState(lockedRoom);
+            }
+          }
         } else {
-          callback({ success: false, error: 'Erro ao registrar aposta de adivinhador.' });
+          callback({
+            success: false,
+            code: betResult?.code,
+            error: betResult?.error || 'Erro ao registrar aposta de adivinhador.',
+          });
         }
       }
     );
 
-    // Resolve Round
+    // Skip / Advance Reveal Step (Host only)
+    socket.on('skip_reveal_step', (data: { roomCode: string }, callback) => {
+      const room = roomStore.getRoom(data.roomCode);
+      if (!room || room.hostId !== socket.id) {
+        return callback?.({ success: false, error: 'Apenas o líder pode avançar a revelação.' });
+      }
+      if (room.phase === 'REVEAL') {
+        const advanced = roomStore.advanceRevealStep(data.roomCode);
+        if (advanced) {
+          callback?.({ success: true, room: advanced });
+          broadcastRoomState(advanced);
+        }
+      } else if (room.phase === 'BET_LOCKED') {
+        const revealRoom = roomStore.startRevealSequence(data.roomCode);
+        if (revealRoom) {
+          callback?.({ success: true, room: revealRoom });
+          broadcastRoomState(revealRoom);
+        }
+      }
+    });
+
+    // Resolve Round (Host only or automated fallback)
     socket.on('resolve_round', (data: { roomCode: string }, callback) => {
       const room = roomStore.resolveRound(data.roomCode);
       if (room && room.lastRoundResult) {
         callback({ success: true, room, roundResult: room.lastRoundResult });
         io.to(room.code).emit('round_resolved', { room, result: room.lastRoundResult });
-
-        // Auto-advance to next round (music selection) after 5 seconds
-        setTimeout(() => {
-          const currentRoom = roomStore.getRoom(data.roomCode);
-          if (currentRoom && currentRoom.phase === 'REVEAL') {
-            const updatedRoom = roomStore.nextRound(data.roomCode);
-            if (updatedRoom) {
-              io.to(updatedRoom.code).emit('room_updated', updatedRoom);
-            }
-          }
-        }, 5000);
+        broadcastRoomState(room);
       } else {
         callback({ success: false, error: 'Erro ao resolver rodada.' });
       }
     });
 
-    // Next Round
+    // Next Round (Host only)
     socket.on('next_round', (data: { roomCode: string }, callback) => {
-      const room = roomStore.nextRound(data.roomCode);
-      if (room) {
-        callback({ success: true, room });
-        io.to(room.code).emit('room_updated', room);
+      const room = roomStore.getRoom(data.roomCode);
+      if (!room || room.hostId !== socket.id) {
+        return callback({ success: false, error: 'Apenas o líder pode avançar a rodada.' });
+      }
+      const updated = roomStore.nextRound(data.roomCode);
+      if (updated) {
+        callback({ success: true, room: updated });
+        broadcastRoomState(updated);
       } else {
         callback({ success: false, error: 'Erro ao avançar rodada.' });
       }
@@ -283,35 +414,80 @@ export function setupSocketHandlers(io: Server) {
         const msg = roomStore.addChatMessage(room.code, socket.id, data.senderName, data.text);
         if (msg) {
           io.to(room.code).emit('chat_received', msg);
-          io.to(room.code).emit('room_updated', room);
+          broadcastRoomState(room);
         }
       }
     });
 
-    // Broadcast Emoji Reaction
-    socket.on('send_reaction', (data: { roomCode: string; emoji: string; senderName: string }) => {
+    // Broadcast Text Reaction (Zero Emojis Policy)
+    socket.on('send_reaction', (data: { roomCode: string; label: string; senderName: string }) => {
       const room = roomStore.getRoom(data.roomCode);
       if (room) {
+        const cleanLabel = (data.label || 'Bravos').replace(/[^\w\s\u00C0-\u00FF\[\]\?!-]/g, '').trim();
         const reactionMsg = roomStore.addChatMessage(
           room.code,
           socket.id,
           data.senderName,
-          `reagiu ${data.emoji}`
+          `reagiu: ${cleanLabel}`
         );
         if (reactionMsg) {
           io.to(room.code).emit('chat_received', reactionMsg);
-          io.to(room.code).emit('room_updated', room);
+          broadcastRoomState(room);
         }
         io.to(room.code).emit('reaction_received', {
           id: `reaction-${Date.now()}`,
-          emoji: data.emoji,
+          label: cleanLabel,
           senderName: data.senderName,
         });
       }
     });
 
+    // Handle Disconnect with Host Migration and Room Preservation
     socket.on('disconnect', () => {
       console.log(`[Socket Disconnected] ID: ${socket.id}`);
+      const rooms = roomStore.getAllRooms();
+      for (const room of rooms) {
+        const pIndex = room.players.findIndex((p) => p.id === socket.id);
+        if (pIndex !== -1) {
+          const disconnectedPlayer = room.players[pIndex];
+          if (room.phase === 'LOBBY') {
+            if (!disconnectedPlayer.isBot) {
+              room.players.splice(pIndex, 1);
+              if (room.hostId === socket.id && room.players.length > 0) {
+                const nextHost = room.players.find((p) => !p.isBot) || room.players[0];
+                room.hostId = nextHost.id;
+                nextHost.isHost = true;
+                roomStore.addChatMessage(
+                  room.code,
+                  'SYSTEM',
+                  'WHO Bot',
+                  `${nextHost.nickname} agora é o líder da sala.`,
+                  true
+                );
+              }
+              broadcastRoomState(room);
+            }
+          } else {
+            // Mid-game: preserve state for reconnection; migrate host if disconnected host
+            if (room.hostId === socket.id) {
+              const activeHuman = room.players.find((p) => !p.isBot && p.id !== socket.id);
+              if (activeHuman) {
+                room.hostId = activeHuman.id;
+                activeHuman.isHost = true;
+                roomStore.addChatMessage(
+                  room.code,
+                  'SYSTEM',
+                  'WHO Bot',
+                  `Liderança transferida para ${activeHuman.nickname}.`,
+                  true
+                );
+                broadcastRoomState(room);
+              }
+            }
+          }
+        }
+      }
     });
   });
 }
+

@@ -183,7 +183,7 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
             Rodada {room.currentRound} de {room.totalRounds}
           </span>
           <span className="text-xs text-yellow-100 font-semibold flex items-center gap-1 justify-end">
-            <Coins className="w-3.5 h-3.5 text-yellow-300" /> Saldo: {myMaxChips} 🪙
+            <Coins className="w-3.5 h-3.5 text-yellow-300" /> Saldo: {myMaxChips} fichas
           </span>
         </div>
       </header>
