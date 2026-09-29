@@ -44,8 +44,6 @@ export function setupSocketHandlers(io: Server) {
           if ((room.turnTimeRemainingSeconds ?? 0) <= 0) {
             const updated = roomStore.handleTurnTimeout(room.code);
             broadcastRoomState(updated || room);
-          } else {
-            broadcastRoomState(room);
           }
         }
       } else if (room.phase === 'BETTING') {
@@ -322,7 +320,7 @@ export function setupSocketHandlers(io: Server) {
         },
         callback
       ) => {
-        const room = roomStore.placeOwnerBet(
+        const result = roomStore.placeOwnerBet(
           data.roomCode,
           socket.id,
           data.predictionKind,
@@ -330,12 +328,12 @@ export function setupSocketHandlers(io: Server) {
           data.targetPlayerIds,
           data.expectedCount
         );
-        if (room) {
+        if (result.accepted && result.room) {
           const sanitized = roomStore.getSanitizedRoomState(data.roomCode, socket.id);
-          callback({ success: true, room: sanitized });
-          broadcastRoomState(room);
+          callback?.({ success: true, room: sanitized });
+          broadcastRoomState(result.room);
         } else {
-          callback({ success: false, error: 'Erro ao registrar aposta do dono.' });
+          callback?.({ success: false, error: result.error || 'Erro ao registrar aposta do dono.' });
         }
       }
     );

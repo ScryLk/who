@@ -12,6 +12,8 @@ import {
   calculateRoundResolution,
   createRevealOrder,
   generateUniqueNickname,
+  normalizeOwnerPrediction,
+  validateOwnerPrediction,
 } from '@who/shared';
 import { FEATURED_CATALOG } from './musicService';
 import { redisRoomStore } from './redisStore';
@@ -79,6 +81,7 @@ class RoomStore {
       players: [hostPlayer],
       submittedTracks: [],
       guesserBets: {},
+      pendingOwnerBets: {},
       options,
       chatMessages: [
         {
@@ -282,6 +285,7 @@ class RoomStore {
     room.submittedTracks = [];
     room.guesserBets = {};
     delete room.ownerBet;
+    room.pendingOwnerBets = {};
     delete room.currentTrack;
 
     this.addChatMessage(
@@ -358,6 +362,15 @@ class RoomStore {
 
     const currentTurnPlayer = room.players.find((p) => p.id === room.currentTurnPlayerId);
     if (!currentTurnPlayer) return this.advanceTurn(code);
+
+    if (!room.pendingOwnerBets) room.pendingOwnerBets = {};
+    if (!room.pendingOwnerBets[currentTurnPlayer.id]) {
+      room.pendingOwnerBets[currentTurnPlayer.id] = {
+        ownerId: currentTurnPlayer.id,
+        predictionKind: 'NONE',
+        chipAmount: 0,
+      };
+    }
 
     // 1. If player already selected a track, auto-confirm it!
     if (currentTurnPlayer.selectedTrack) {
@@ -532,22 +545,22 @@ class RoomStore {
     // Pick first track for round 1
     room.currentTrack = room.submittedTracks[0];
     room.guesserBets = {};
-    delete room.ownerBet;
+    const ownerId = room.currentTrack.submittedByPlayerId;
+    room.ownerBet = room.pendingOwnerBets?.[ownerId];
 
     // Auto-place bot bets
-    const ownerId = room.currentTrack.submittedByPlayerId;
-
     room.players.forEach((player) => {
       if (player.isBot) {
         if (player.id === ownerId) {
-          // Bot is owner
-          const predictions = ['NONE', 'PLAYER_COUNT', 'SPECIFIC_PLAYERS'] as const;
-          const randPred = predictions[Math.floor(Math.random() * predictions.length)];
-          room.ownerBet = {
-            ownerId: player.id,
-            predictionKind: randPred,
-            chipAmount: 150,
-          };
+          if (!room.ownerBet) {
+            const predictions = ['NONE', 'PLAYER_COUNT', 'SPECIFIC_PLAYERS'] as const;
+            const randPred = predictions[Math.floor(Math.random() * predictions.length)];
+            room.ownerBet = {
+              ownerId: player.id,
+              predictionKind: randPred,
+              chipAmount: 150,
+            };
+          }
         } else {
           // Bot is guesser -> pick random target player
           const nonOwnerPlayers = room.players.filter((p) => p.id !== ownerId);
@@ -576,27 +589,71 @@ class RoomStore {
   placeOwnerBet(
     code: string,
     ownerId: string,
-    predictionKind: 'SPECIFIC_PLAYERS' | 'PLAYER_COUNT' | 'NONE',
+    predictionKind: SecondaryPredictionKind,
     chipAmount: number,
     targetPlayerIds?: string[],
     expectedCount?: number
-  ): RoomState | undefined {
+  ): { room?: RoomState; accepted: boolean; error?: string } {
     const room = this.getRoom(code);
-    if (!room || !room.currentTrack) return undefined;
-    if (room.currentTrack.submittedByPlayerId !== ownerId) return undefined;
+    if (!room) return { accepted: false, error: 'Sala não encontrada.' };
 
     const player = room.players.find((p) => p.id === ownerId);
-    const startingBalance = room.startingBalances?.[ownerId] ?? player?.chips ?? 0;
-    const validatedChipAmount = Math.max(0, Math.min(chipAmount, startingBalance));
+    if (!player) return { accepted: false, error: 'Jogador não encontrado.' };
 
-    room.ownerBet = {
+    const eligibleGuessers = room.players.filter((p) => p.id !== ownerId);
+    const eligibleCount = eligibleGuessers.length;
+    const eligibleIds = eligibleGuessers.map((p) => p.id);
+
+    const availableBalance = room.startingBalances?.[ownerId] ?? player.chips;
+
+    const validation = validateOwnerPrediction(
+      {
+        predictionKind,
+        expectedCount,
+        targetPlayerIds,
+        chipAmount,
+        availableBalance,
+      },
+      eligibleCount,
+      eligibleIds
+    );
+
+    if (!validation.valid) {
+      return { accepted: false, error: validation.error || 'Previsão de dono inválida.' };
+    }
+
+    const normalized = normalizeOwnerPrediction(
+      {
+        predictionKind,
+        expectedCount,
+        targetPlayerIds,
+        chipAmount,
+      },
+      eligibleCount
+    );
+
+    const validatedChipAmount = Math.max(0, Math.min(normalized.chipAmount, availableBalance));
+
+    const finalBet: OwnerBet = {
       ownerId,
-      predictionKind,
-      targetPlayerIds,
-      expectedCount,
+      predictionKind: normalized.predictionKind,
+      targetPlayerIds: normalized.targetPlayerIds,
+      expectedCount: normalized.expectedCount,
       chipAmount: validatedChipAmount,
     };
-    return room;
+
+    if (!room.pendingOwnerBets) {
+      room.pendingOwnerBets = {};
+    }
+    room.pendingOwnerBets[ownerId] = finalBet;
+
+    // If current round belongs to this owner, set active ownerBet
+    if (room.currentTrack?.submittedByPlayerId === ownerId) {
+      room.ownerBet = finalBet;
+    }
+
+    redisRoomStore.saveRoom(room).catch(() => {});
+    return { room, accepted: true };
   }
 
   placeGuesserBet(
@@ -802,7 +859,8 @@ class RoomStore {
     room.roundDurationSeconds = duration;
     room.timeRemainingSeconds = duration;
     room.guesserBets = {};
-    delete room.ownerBet;
+    const ownerId = room.currentTrack.submittedByPlayerId;
+    room.ownerBet = room.pendingOwnerBets?.[ownerId];
 
     // Record pre-bet starting balances for risk calculations
     room.startingBalances = {};
@@ -816,17 +874,18 @@ class RoomStore {
     delete room.lastRoundResult;
 
     // Setup bot bets for this round
-    const ownerId = room.currentTrack.submittedByPlayerId;
     room.players.forEach((player) => {
       if (player.isBot) {
         if (player.id === ownerId) {
-          const predictions: SecondaryPredictionKind[] = ['NONE', 'PLAYER_COUNT', 'SPECIFIC_PLAYERS'];
-          const randPred = predictions[Math.floor(Math.random() * predictions.length)];
-          room.ownerBet = {
-            ownerId: player.id,
-            predictionKind: randPred,
-            chipAmount: 150,
-          };
+          if (!room.ownerBet) {
+            const predictions: SecondaryPredictionKind[] = ['NONE', 'PLAYER_COUNT', 'SPECIFIC_PLAYERS'];
+            const randPred = predictions[Math.floor(Math.random() * predictions.length)];
+            room.ownerBet = {
+              ownerId: player.id,
+              predictionKind: randPred,
+              chipAmount: 150,
+            };
+          }
         } else {
           const nonOwnerPlayers = room.players.filter((p) => p.id !== ownerId);
           const targetPlayer =
@@ -973,12 +1032,19 @@ class RoomStore {
 
     const sanitizedLastRoundResult = shouldSendRoundResult ? room.lastRoundResult : undefined;
 
+    // 5. pendingOwnerBets masking: only the requesting player sees their own pending prediction
+    const sanitizedPendingOwnerBets =
+      forPlayerId && room.pendingOwnerBets?.[forPlayerId]
+        ? { [forPlayerId]: room.pendingOwnerBets[forPlayerId] }
+        : undefined;
+
     return {
       ...room,
       currentTrack: sanitizedCurrentTrack,
       submittedTracks: sanitizedSubmittedTracks,
       guesserBets: sanitizedGuesserBets,
       ownerBet: sanitizedOwnerBet,
+      pendingOwnerBets: sanitizedPendingOwnerBets,
       lastRoundResult: sanitizedLastRoundResult,
     };
   }

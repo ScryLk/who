@@ -162,6 +162,7 @@ export interface RoomState {
   currentTrack?: Track;
   guesserBets: Record<string, GuesserBet>;
   ownerBet?: OwnerBet;
+  pendingOwnerBets?: Record<string, OwnerBet>;
   lastRoundResult?: RoundResult;
   chatMessages: ChatMessage[];
   options?: RoomOptions;

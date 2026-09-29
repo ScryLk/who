@@ -1,7 +1,17 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Player, RoomState, SecondaryPredictionKind, canAffordBetIncrement } from '@who/shared';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import {
+  Player,
+  RoomState,
+  SecondaryPredictionKind,
+  canAffordBetIncrement,
+  getExpectedCountBounds,
+  requiresExpectedCount,
+  clampExpectedCount,
+  getPredictionDescription,
+  formatDurationDisplay,
+} from '@who/shared';
 import {
   Users,
   Music,
@@ -42,7 +52,7 @@ import { AudioWaveformScrubber } from '@/components/game/AudioWaveformScrubber';
 import { YouTubeClipSelector } from '@/components/game/YouTubeClipSelector';
 import { YouTubeRoundPlayer } from '@/components/game/YouTubeRoundPlayer';
 import { SelectionCountdown } from '@/components/game/SelectionCountdown';
-import { formatDurationDisplay } from '@who/shared';
+import { PredictionCountStepper } from '@/components/game/PredictionCountStepper';
 import { BetRiskIndicator } from '@/components/game/BetRiskIndicator';
 import { BetRevealStepper } from '@/components/game/BetRevealStepper';
 import { OwnerRevealSequence } from '@/components/game/OwnerRevealSequence';
@@ -162,6 +172,44 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
   const [expectedCount, setExpectedCount] = useState<number>(1);
   const [selectedTargetPlayerIds, setSelectedTargetPlayerIds] = useState<string[]>([]);
   const [confirmedChoice, setConfirmedChoice] = useState(false);
+
+  const eligibleGuessers = useMemo(() => {
+    return room.players.filter((p) => p.id !== myPlayerId);
+  }, [room.players, myPlayerId]);
+  const eligibleCount = eligibleGuessers.length;
+
+  const predictionBounds = useMemo(() => {
+    return getExpectedCountBounds(ownerPredictionKind, eligibleCount);
+  }, [ownerPredictionKind, eligibleCount]);
+
+  const selectedTargetNames = useMemo(() => {
+    return selectedTargetPlayerIds
+      .map((id) => room.players.find((p) => p.id === id)?.nickname || 'Jogador')
+      .filter(Boolean);
+  }, [selectedTargetPlayerIds, room.players]);
+
+  const predictionSummaryText = useMemo(() => {
+    return getPredictionDescription(ownerPredictionKind, expectedCount, selectedTargetNames);
+  }, [ownerPredictionKind, expectedCount, selectedTargetNames]);
+
+  const predictionMultiplier = useMemo(() => {
+    switch (ownerPredictionKind) {
+      case 'PLAYER_COUNT': return '3.0';
+      case 'MORE_THAN': return '2.5';
+      case 'FEWER_THAN': return '2.5';
+      case 'SPECIFIC_PLAYERS': return '3.5';
+      case 'NONE': return '4.0';
+      default: return '2.0';
+    }
+  }, [ownerPredictionKind]);
+
+  const handleSelectPredictionKind = useCallback((kind: SecondaryPredictionKind) => {
+    playChipSound();
+    setOwnerPredictionKind(kind);
+    if (requiresExpectedCount(kind)) {
+      setExpectedCount((prev) => clampExpectedCount(kind, prev, eligibleCount));
+    }
+  }, [eligibleCount, playChipSound]);
 
   // Turn status checks
   const isMyTurn = room.phase === 'MUSIC_SELECTION' && room.currentTurnPlayerId === myPlayerId;
@@ -339,9 +387,14 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     setSearchResults([]);
   };
 
-  const handleStartTimeChange = (sec: number) => {
+  const handleStartTimeChange = useCallback((sec: number) => {
     setStartTimeSeconds(sec);
-  };
+  }, []);
+
+  const handleAudioReady = useCallback((duration: number) => {
+    setIsAudioReady(true);
+    setTrackDuration(duration);
+  }, []);
 
   // Preview Audio Player with strict clip bounding
   const togglePlayPreview = () => {
@@ -1027,324 +1080,376 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                       </div>
                     </div>
                   </div>
-                ) : activeSelectionTab === 'MUSIC' ? (
-                  /* MOMENT 2: CLIP_EDIT_MODE ("Qual trecho dessa música eu quero?") */
-                  <div className="flex-1 flex flex-col justify-between space-y-2">
-                    {/* Top Track Summary Banner with "Trocar Faixa" */}
-                    <div className="p-2 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-between gap-3 backdrop-blur-md">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        {selectedTrack.albumArt ? (
-                          <img
-                            src={selectedTrack.albumArt}
-                            alt={selectedTrack.title}
-                            className="w-9 h-9 rounded-xl object-cover shadow border border-white/20 flex-shrink-0"
-                          />
-                        ) : (
-                          <div className="w-9 h-9 rounded-xl bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
-                            <Music className="w-5 h-5" />
-                          </div>
-                        )}
-                        <div className="min-w-0 text-left">
-                          <div className="font-extrabold text-xs sm:text-sm truncate text-white flex items-center gap-2">
-                            <span className="truncate">{selectedTrack.title}</span>
-                            {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 font-bold border border-red-500/30 flex-shrink-0">
-                                YouTube
-                              </span>
-                            ) : (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30 flex-shrink-0">
-                                Preview
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-blue-200/80 truncate flex items-center gap-2">
-                            <span>{selectedTrack.artist}</span>
-                            {selectedTrack.durationSeconds && (
-                              <span className="text-slate-400 font-mono">
-                                • {formatDurationDisplay(selectedTrack.durationSeconds)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (previewAudioRef.current) {
-                            previewAudioRef.current.pause();
-                            previewAudioRef.current = null;
-                            setIsPlayingPreview(false);
-                          }
-                          setSelectedTrack(null);
-                          setIsAudioReady(false);
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white text-xs font-bold transition border border-white/15 flex items-center gap-1.5 cursor-pointer flex-shrink-0 active:scale-95"
-                        title="Buscar outra música"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Trocar Faixa</span>
-                      </button>
-                    </div>
-
-                    {/* Arena: YouTube Clip Selector or Audio Scrubber */}
-                    <div className="flex-1 flex flex-col justify-center">
-                      {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
-                        <YouTubeClipSelector
-                          key={selectedTrack.id || selectedTrack.videoId || selectedTrack.youtubeId}
-                          selectedTrack={selectedTrack}
-                          startTimeSeconds={startTimeSeconds}
-                          windowDurationSeconds={clipDuration}
-                          onChangeStartTime={handleStartTimeChange}
-                          onReady={(duration) => {
-                            setIsAudioReady(true);
-                            setTrackDuration(duration);
-                          }}
-                        />
-                      ) : (
-                        <AudioWaveformScrubber
-                          key={selectedTrack.id}
-                          selectedTrack={selectedTrack}
-                          startTimeSeconds={startTimeSeconds}
-                          windowDurationSeconds={clipDuration}
-                          onChangeStartTime={handleStartTimeChange}
-                          onReady={(duration) => {
-                            setIsAudioReady(true);
-                            setTrackDuration(duration);
-                          }}
-                        />
-                      )}
-                    </div>
-
-                    {/* Action Bar for Clip Edit Mode */}
-                    <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
-                      <SelectionCountdown
-                        selectionDeadlineAt={room.selectionDeadlineAt}
-                        fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
-                        isMuted={isSfxMuted}
-                        onPlayTick={playTickSound}
-                        variant="actionBar"
-                      />
-
-                      <button
-                        type="button"
-                        disabled={!isAudioReady}
-                        onClick={() => setActiveSelectionTab('PREDICTION')}
-                        className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2 cursor-pointer ${
-                          !isAudioReady
-                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                            : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 active:scale-95'
-                        }`}
-                      >
-                        <span>
-                          {!isAudioReady ? 'Carregando trecho...' : 'Confirmar Trecho →'}
-                        </span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
                 ) : (
-                  /* MOMENT 3: PREDICTION_MODE ("Como acho que os outros vão reagir?") */
+                  /* MOMENT 2 & 3: CLIP EDIT & PREDICTION CO-EXISTENT WORKSPACE (NO UNMOUNT / NO FLICKER) */
                   <div className="flex-1 flex flex-col justify-between space-y-2">
-                    {/* Top Track & Clip Summary Banner */}
-                    <div className="p-2 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-between gap-3 backdrop-blur-md">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        {selectedTrack.albumArt ? (
-                          <img
-                            src={selectedTrack.albumArt}
-                            alt={selectedTrack.title}
-                            className="w-9 h-9 rounded-xl object-cover shadow border border-white/20 flex-shrink-0"
-                          />
-                        ) : (
-                          <div className="w-9 h-9 rounded-xl bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
-                            <Music className="w-5 h-5" />
-                          </div>
-                        )}
-                        <div className="min-w-0 text-left">
-                          <div className="font-extrabold text-xs sm:text-sm truncate text-white">
-                            {selectedTrack.title}
-                          </div>
-                          <div className="text-[11px] text-blue-200/80 truncate flex items-center gap-2">
-                            <span>{selectedTrack.artist}</span>
-                            <span className="text-yellow-300 font-mono font-bold">
-                              • Trecho: {formatTime(startTimeSeconds)} → {formatTime(startTimeSeconds + clipDuration)} ({clipDuration}s)
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setActiveSelectionTab('MUSIC')}
-                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white text-xs font-bold transition border border-white/15 flex items-center gap-1.5 cursor-pointer flex-shrink-0 active:scale-95"
-                        title="Voltar ao editor de trecho"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Editar Trecho</span>
-                      </button>
-                    </div>
-
-                    {/* Prediction Arena */}
-                    <div className="space-y-3 text-left">
-                      <div className="p-3 rounded-2xl bg-white/10 border border-white/15 space-y-2.5 backdrop-blur-md">
-                        <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
-                          <Star className="w-4 h-4 fill-current text-yellow-400" />
-                          <span>Como a sala vai reagir à sua música?</span>
-                        </label>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                          {[
-                            { kind: 'PLAYER_COUNT', label: 'Quantidade Exata', sub: '3.0x retorno' },
-                            { kind: 'MORE_THAN', label: 'Mais de X Jogadores', sub: '2.5x retorno' },
-                            { kind: 'FEWER_THAN', label: 'Menos de X Jogadores', sub: '2.5x retorno' },
-                            { kind: 'SPECIFIC_PLAYERS', label: 'Jogador Específico', sub: '3.5x retorno' },
-                            { kind: 'NONE', label: 'Ninguém (0)', sub: '4.0x retorno' },
-                          ].map((opt) => (
-                            <button
-                              key={opt.kind}
-                              type="button"
-                              onClick={() => {
-                                playChipSound();
-                                setOwnerPredictionKind(opt.kind as SecondaryPredictionKind);
-                              }}
-                              className={`p-2 rounded-xl border text-left transition cursor-pointer ${
-                                ownerPredictionKind === opt.kind
-                                  ? 'bg-yellow-400 text-slate-950 border-yellow-300 font-extrabold shadow-glow-yellow'
-                                  : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
-                              }`}
-                            >
-                              <div className="text-xs font-extrabold">{opt.label}</div>
-                              <div className={`text-[10px] ${ownerPredictionKind === opt.kind ? 'text-slate-900 font-bold' : 'text-cyan-300'}`}>
-                                {opt.sub}
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Target players if SPECIFIC_PLAYERS */}
-                        {ownerPredictionKind === 'SPECIFIC_PLAYERS' && (
-                          <div className="space-y-1.5 pt-2 border-t border-white/10">
-                            <span className="text-xs font-bold text-blue-200">Quem vai acertar sua música?</span>
-                            <div className="flex flex-wrap gap-1.5">
-                              {room.players
-                                .filter((p) => p.id !== myPlayerId)
-                                .map((p) => {
-                                  const isSelected = selectedTargetPlayerIds.includes(p.id);
-                                  return (
-                                    <button
-                                      key={p.id}
-                                      type="button"
-                                      onClick={() => {
-                                        playChipSound();
-                                        if (isSelected) {
-                                          setSelectedTargetPlayerIds(selectedTargetPlayerIds.filter((id) => id !== p.id));
-                                        } else {
-                                          setSelectedTargetPlayerIds([...selectedTargetPlayerIds, p.id]);
-                                        }
-                                      }}
-                                      className={`px-3 py-1 rounded-xl border text-xs font-extrabold transition flex items-center gap-1 cursor-pointer ${
-                                        isSelected
-                                          ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
-                                          : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
-                                      }`}
-                                    >
-                                      <span>{p.nickname}</span>
-                                      {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
-                                    </button>
-                                  );
-                                })}
+                    {/* MOMENT 2: CLIP_EDIT_MODE ("Qual trecho dessa música eu quero?") */}
+                    <div className={activeSelectionTab === 'MUSIC' ? 'flex-1 flex flex-col justify-between space-y-2' : 'hidden'}>
+                      {/* Top Track Summary Banner with "Trocar Faixa" */}
+                      <div className="p-2 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-between gap-3 backdrop-blur-md">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          {selectedTrack.albumArt ? (
+                            <img
+                              src={selectedTrack.albumArt}
+                              alt={selectedTrack.title}
+                              className="w-9 h-9 rounded-xl object-cover shadow border border-white/20 flex-shrink-0"
+                            />
+                          ) : (
+                            <div className="w-9 h-9 rounded-xl bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
+                              <Music className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="min-w-0 text-left">
+                            <div className="font-extrabold text-xs sm:text-sm truncate text-white flex items-center gap-2">
+                              <span className="truncate">{selectedTrack.title}</span>
+                              {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 font-bold border border-red-500/30 flex-shrink-0">
+                                  YouTube
+                                </span>
+                              ) : (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/30 flex-shrink-0">
+                                  Preview
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-blue-200/80 truncate flex items-center gap-2">
+                              <span>{selectedTrack.artist}</span>
+                              {selectedTrack.durationSeconds && (
+                                <span className="text-slate-400 font-mono">
+                                  • {formatDurationDisplay(selectedTrack.durationSeconds)}
+                                </span>
+                              )}
                             </div>
                           </div>
-                        )}
+                        </div>
 
-                        {/* Chips to bet */}
-                        <div className="flex items-center justify-between pt-2 border-t border-white/10">
-                          <span className="text-xs font-extrabold text-white flex items-center gap-1">
-                            <Coins className="w-4 h-4 text-yellow-300" /> Fichas na previsão:
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (previewAudioRef.current) {
+                              previewAudioRef.current.pause();
+                              previewAudioRef.current = null;
+                              setIsPlayingPreview(false);
+                            }
+                            setSelectedTrack(null);
+                            setIsAudioReady(false);
+                            setActiveSelectionTab('MUSIC');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white text-xs font-bold transition border border-white/15 flex items-center gap-1.5 cursor-pointer flex-shrink-0 active:scale-95"
+                          title="Buscar outra música"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Trocar Faixa</span>
+                        </button>
+                      </div>
+
+                      {/* Arena: YouTube Clip Selector or Audio Scrubber */}
+                      <div className="flex-1 flex flex-col justify-center">
+                        {selectedTrack.provider === 'youtube' || selectedTrack.isVideo ? (
+                          <YouTubeClipSelector
+                            key={selectedTrack.id || selectedTrack.videoId || selectedTrack.youtubeId}
+                            selectedTrack={selectedTrack}
+                            startTimeSeconds={startTimeSeconds}
+                            windowDurationSeconds={clipDuration}
+                            onChangeStartTime={handleStartTimeChange}
+                            onReady={handleAudioReady}
+                          />
+                        ) : (
+                          <AudioWaveformScrubber
+                            key={selectedTrack.id}
+                            selectedTrack={selectedTrack}
+                            startTimeSeconds={startTimeSeconds}
+                            windowDurationSeconds={clipDuration}
+                            onChangeStartTime={handleStartTimeChange}
+                            onReady={handleAudioReady}
+                          />
+                        )}
+                      </div>
+
+                      {/* Action Bar for Clip Edit Mode */}
+                      <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
+                        <SelectionCountdown
+                          selectionDeadlineAt={room.selectionDeadlineAt}
+                          fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                          isMuted={isSfxMuted}
+                          onPlayTick={playTickSound}
+                          variant="actionBar"
+                        />
+
+                        <button
+                          type="button"
+                          disabled={!isAudioReady}
+                          onClick={() => {
+                            if (previewAudioRef.current) {
+                              previewAudioRef.current.pause();
+                              setIsPlayingPreview(false);
+                            }
+                            setActiveSelectionTab('PREDICTION');
+                          }}
+                          className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2 cursor-pointer ${
+                            !isAudioReady
+                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                              : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 active:scale-95'
+                          }`}
+                        >
+                          <span>
+                            {!isAudioReady ? 'Carregando trecho...' : 'Confirmar Trecho →'}
                           </span>
-                          <div className="flex gap-1.5">
-                            {[50, 100, 200, 500].map((amt) => {
-                              const canAfford = amt <= myAvailableBalance;
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* MOMENT 3: PREDICTION_MODE ("Como acho que os outros vão reagir?") */}
+                    <div className={activeSelectionTab === 'PREDICTION' ? 'flex-1 flex flex-col justify-between space-y-2' : 'hidden'}>
+                      {/* Top Track & Clip Summary Banner */}
+                      <div className="p-2 px-3 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-between gap-3 backdrop-blur-md">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          {selectedTrack.albumArt ? (
+                            <img
+                              src={selectedTrack.albumArt}
+                              alt={selectedTrack.title}
+                              className="w-9 h-9 rounded-xl object-cover shadow border border-white/20 flex-shrink-0"
+                            />
+                          ) : (
+                            <div className="w-9 h-9 rounded-xl bg-yellow-400/20 flex items-center justify-center text-yellow-300 flex-shrink-0">
+                              <Music className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="min-w-0 text-left">
+                            <div className="font-extrabold text-xs sm:text-sm truncate text-white">
+                              {selectedTrack.title}
+                            </div>
+                            <div className="text-[11px] text-blue-200/80 truncate flex items-center gap-2">
+                              <span>{selectedTrack.artist}</span>
+                              <span className="text-yellow-300 font-mono font-bold">
+                                • Trecho: {formatTime(startTimeSeconds)} → {formatTime(startTimeSeconds + clipDuration)} ({clipDuration}s)
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setActiveSelectionTab('MUSIC')}
+                          className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 hover:text-white text-xs font-bold transition border border-white/15 flex items-center gap-1.5 cursor-pointer flex-shrink-0 active:scale-95"
+                          title="Voltar ao editor de trecho"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Editar Trecho</span>
+                        </button>
+                      </div>
+
+                      {/* Prediction Arena */}
+                      <div className="space-y-3 text-left">
+                        <div className="p-3 rounded-2xl bg-white/10 border border-white/15 space-y-2.5 backdrop-blur-md">
+                          <label className="text-xs font-extrabold text-yellow-300 flex items-center gap-1.5">
+                            <Star className="w-4 h-4 fill-current text-yellow-400" />
+                            <span>Como a sala vai reagir à sua música?</span>
+                          </label>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            {[
+                              { kind: 'PLAYER_COUNT', label: 'Quantidade Exata', sub: '3.0x retorno' },
+                              { kind: 'MORE_THAN', label: 'Mais de X Jogadores', sub: '2.5x retorno' },
+                              { kind: 'FEWER_THAN', label: 'Menos de X Jogadores', sub: '2.5x retorno' },
+                              { kind: 'SPECIFIC_PLAYERS', label: 'Jogador Específico', sub: '3.5x retorno' },
+                              { kind: 'NONE', label: 'Ninguém (0)', sub: '4.0x retorno' },
+                            ].map((opt) => {
+                              const isAvailable =
+                                opt.kind === 'SPECIFIC_PLAYERS'
+                                  ? eligibleCount > 0
+                                  : opt.kind === 'NONE'
+                                  ? true
+                                  : getExpectedCountBounds(opt.kind as SecondaryPredictionKind, eligibleCount).isAvailable;
+
                               return (
                                 <button
-                                  key={amt}
+                                  key={opt.kind}
                                   type="button"
+                                  disabled={!isAvailable}
                                   onClick={() => {
-                                    if (!canAfford) {
-                                      triggerBlockedFeedback(
-                                        `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
-                                      );
-                                      return;
-                                    }
-                                    playChipSound();
-                                    setOwnerChipBet(amt);
+                                    if (!isAvailable) return;
+                                    handleSelectPredictionKind(opt.kind as SecondaryPredictionKind);
                                   }}
-                                  aria-disabled={!canAfford}
-                                  className={`px-2.5 py-1 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
-                                    ownerChipBet === amt
-                                      ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
-                                      : canAfford
-                                      ? 'bg-white/10 text-white border-white/20 hover:bg-white/20'
-                                      : 'bg-white/5 border-red-500/20 text-slate-500 cursor-not-allowed opacity-40'
+                                  className={`p-2 rounded-xl border text-left transition cursor-pointer ${
+                                    !isAvailable
+                                      ? 'bg-white/5 border-white/5 text-slate-500 opacity-40 cursor-not-allowed'
+                                      : ownerPredictionKind === opt.kind
+                                      ? 'bg-yellow-400 text-slate-950 border-yellow-300 font-extrabold shadow-glow-yellow'
+                                      : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
                                   }`}
                                 >
-                                  +{amt}
+                                  <div className="text-xs font-extrabold">{opt.label}</div>
+                                  <div className={`text-[10px] ${ownerPredictionKind === opt.kind ? 'text-slate-900 font-bold' : isAvailable ? 'text-cyan-300' : 'text-slate-600'}`}>
+                                    {opt.sub}
+                                  </div>
                                 </button>
                               );
                             })}
                           </div>
+
+                          {/* Contextual Stepper for Quantity Bounds */}
+                          {requiresExpectedCount(ownerPredictionKind) && (
+                            <div className="pt-2 border-t border-white/10">
+                              <PredictionCountStepper
+                                value={expectedCount}
+                                min={predictionBounds.min}
+                                max={predictionBounds.max}
+                                onChange={(newVal) => setExpectedCount(newVal)}
+                                contextualLabel={
+                                  ownerPredictionKind === 'PLAYER_COUNT'
+                                    ? `Exatamente ${expectedCount} ${expectedCount === 1 ? 'jogador vai acertar' : 'jogadores vão acertar'}`
+                                    : ownerPredictionKind === 'MORE_THAN'
+                                    ? `Mais de ${expectedCount} ${expectedCount === 1 ? 'jogador vai acertar' : 'jogadores vão acertar'}`
+                                    : `Menos de ${expectedCount} ${expectedCount === 1 ? 'jogador vai acertar' : 'jogadores vão acertar'}`
+                                }
+                                sublabel={`Permitido entre ${predictionBounds.min} e ${predictionBounds.max} jogadores`}
+                              />
+                            </div>
+                          )}
+
+                          {/* Target players if SPECIFIC_PLAYERS */}
+                          {ownerPredictionKind === 'SPECIFIC_PLAYERS' && (
+                            <div className="space-y-1.5 pt-2 border-t border-white/10">
+                              <span className="text-xs font-bold text-blue-200">Quem vai acertar sua música?</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {room.players
+                                  .filter((p) => p.id !== myPlayerId)
+                                  .map((p) => {
+                                    const isSelected = selectedTargetPlayerIds.includes(p.id);
+                                    return (
+                                      <button
+                                        key={p.id}
+                                        type="button"
+                                        onClick={() => {
+                                          playChipSound();
+                                          if (isSelected) {
+                                            setSelectedTargetPlayerIds(selectedTargetPlayerIds.filter((id) => id !== p.id));
+                                          } else {
+                                            setSelectedTargetPlayerIds([...selectedTargetPlayerIds, p.id]);
+                                          }
+                                        }}
+                                        className={`px-3 py-1 rounded-xl border text-xs font-extrabold transition flex items-center gap-1 cursor-pointer ${
+                                          isSelected
+                                            ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
+                                            : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                        }`}
+                                      >
+                                        <span>{p.nickname}</span>
+                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                      </button>
+                                    );
+                                  })}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Chips to bet */}
+                          <div className="flex items-center justify-between pt-2 border-t border-white/10">
+                            <span className="text-xs font-extrabold text-white flex items-center gap-1">
+                              <Coins className="w-4 h-4 text-yellow-300" /> Fichas na previsão:
+                            </span>
+                            <div className="flex gap-1.5">
+                              {[50, 100, 200, 500].map((amt) => {
+                                const canAfford = amt <= myAvailableBalance;
+                                return (
+                                  <button
+                                    key={amt}
+                                    type="button"
+                                    onClick={() => {
+                                      if (!canAfford) {
+                                        triggerBlockedFeedback(
+                                          `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
+                                        );
+                                        return;
+                                      }
+                                      playChipSound();
+                                      setOwnerChipBet(amt);
+                                    }}
+                                    aria-disabled={!canAfford}
+                                    className={`px-2.5 py-1 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                                      ownerChipBet === amt
+                                        ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow'
+                                        : canAfford
+                                        ? 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                        : 'bg-white/5 border-red-500/20 text-slate-500 cursor-not-allowed opacity-40'
+                                    }`}
+                                  >
+                                    +{amt}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Dynamic Prediction Summary Badge */}
+                          <div className="p-2.5 rounded-xl bg-slate-950/70 border border-amber-500/30 flex items-center justify-between text-xs mt-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                              <span className="text-slate-300 truncate">
+                                <strong className="text-white">Sua previsão:</strong>{' '}
+                                <span className="text-amber-300 font-semibold">{predictionSummaryText}</span>
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 font-mono flex-shrink-0">
+                              <span className="text-yellow-400 font-bold">{ownerChipBet} fichas</span>
+                              <span className="text-slate-500">•</span>
+                              <span className="text-cyan-300 font-bold">{predictionMultiplier}x retorno</span>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Action Bar for Prediction Mode */}
-                    <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
-                      <SelectionCountdown
-                        selectionDeadlineAt={room.selectionDeadlineAt}
-                        fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
-                        isMuted={isSfxMuted}
-                        onPlayTick={playTickSound}
-                        variant="actionBar"
-                      />
+                      {/* Action Bar for Prediction Mode */}
+                      <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
+                        <SelectionCountdown
+                          selectionDeadlineAt={room.selectionDeadlineAt}
+                          fallbackSeconds={room.turnTimeRemainingSeconds ?? 90}
+                          isMuted={isSfxMuted}
+                          onPlayTick={playTickSound}
+                          variant="actionBar"
+                        />
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setActiveSelectionTab('MUSIC')}
-                          className="px-3.5 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/15 transition cursor-pointer flex items-center gap-1.5"
-                        >
-                          <ArrowLeft className="w-3.5 h-3.5" />
-                          <span>Voltar ao Trecho</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setActiveSelectionTab('MUSIC')}
+                            className="px-3.5 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/15 transition cursor-pointer flex items-center gap-1.5"
+                          >
+                            <ArrowLeft className="w-3.5 h-3.5" />
+                            <span>Voltar ao Trecho</span>
+                          </button>
 
-                        <button
-                          disabled={!selectedTrack || !isAudioReady || confirmedChoice}
-                          onClick={handleConfirmChoice}
-                          className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-xl flex items-center justify-center gap-2 cursor-pointer ${
-                            confirmedChoice
-                              ? 'bg-emerald-500 text-white cursor-not-allowed'
-                              : !selectedTrack || !isAudioReady
-                              ? 'bg-white/10 text-white/40 cursor-not-allowed border border-white/10'
-                              : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 shadow-glow-yellow active:scale-95'
-                          }`}
-                        >
-                          {confirmedChoice ? (
-                            <>
-                              <CheckCircle2 className="w-4 h-4" />
-                              <span>Música Confirmada!</span>
-                            </>
-                          ) : !isAudioReady ? (
-                            <>
-                              <Clock className="w-4 h-4 animate-pulse" />
-                              <span>Aguardando Áudio...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Check className="w-4 h-4 stroke-[3]" />
-                              <span>Confirmar Escolha</span>
-                            </>
-                          )}
-                        </button>
+                          <button
+                            disabled={!selectedTrack || !isAudioReady || confirmedChoice}
+                            onClick={handleConfirmChoice}
+                            className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-xl flex items-center justify-center gap-2 cursor-pointer ${
+                              confirmedChoice
+                                ? 'bg-emerald-500 text-white cursor-not-allowed'
+                                : !selectedTrack || !isAudioReady
+                                ? 'bg-white/10 text-white/40 cursor-not-allowed border border-white/10'
+                                : 'bg-yellow-400 hover:bg-yellow-300 text-slate-950 shadow-glow-yellow active:scale-95'
+                            }`}
+                          >
+                            {confirmedChoice ? (
+                              <>
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>Música Confirmada!</span>
+                              </>
+                            ) : !isAudioReady ? (
+                              <>
+                                <Clock className="w-4 h-4 animate-pulse" />
+                                <span>Aguardando Áudio...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-4 h-4 stroke-[3]" />
+                                <span>Confirmar Escolha</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

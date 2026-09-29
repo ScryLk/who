@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { SecondaryPredictionKind, Player, RoomState, ChatMessage } from '@who/shared';
+import { SecondaryPredictionKind, Player, RoomState, ChatMessage, requiresExpectedCount } from '@who/shared';
 import { Play, Pause, Music, Volume2, Send, Crown, Check, Headphones, MessageSquare, Sparkles, Coins, Flame, Target, UserCheck, Users, Ban } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
@@ -141,7 +141,7 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
       finalBet,
       predictionKind,
       predictionKind === 'SPECIFIC_PLAYERS' ? selectedTargetPlayerIds : undefined,
-      predictionKind === 'PLAYER_COUNT' ? expectedCount : undefined
+      requiresExpectedCount(predictionKind) ? expectedCount : undefined
     );
     setSubmittedBet(true);
   };
@@ -152,7 +152,7 @@ export const BettingPhase: React.FC<BettingPhaseProps> = ({
       predictionKind || 'NONE',
       finalBet,
       predictionKind === 'SPECIFIC_PLAYERS' ? selectedTargetPlayerIds : undefined,
-      predictionKind === 'PLAYER_COUNT' ? expectedCount : undefined
+      requiresExpectedCount(predictionKind) ? expectedCount : undefined
     );
     setSubmittedBet(true);
   };
