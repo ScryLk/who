@@ -8,3 +8,4 @@ export * from './odds/riskEngine';
 export * from './identity/nicknameGenerator';
 export * from './audio/clipEngine';
 export * from './audio/youtubeParser';
+export * from './audio/trackUtils';

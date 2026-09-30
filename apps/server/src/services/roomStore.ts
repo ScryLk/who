@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
   ChatMessage,
   DEFAULT_ROOM_SETTINGS,
@@ -12,6 +13,7 @@ import {
   calculateRoundResolution,
   createRevealOrder,
   generateUniqueNickname,
+  getTrackUniqueKey,
   normalizeOwnerPrediction,
   validateOwnerPrediction,
 } from '@who/shared';
@@ -29,6 +31,8 @@ const BOT_AVATARS = [
 
 class RoomStore {
   private rooms: Map<string, RoomState> = new Map();
+  private reconnectTokens: Map<string, string> = new Map();
+  private privateTrackDrafts: Map<string, Omit<Track, 'submittedByPlayerId'>> = new Map();
 
   generateRoomCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -40,6 +44,60 @@ class RoomStore {
       return this.generateRoomCode();
     }
     return code;
+  }
+
+  createReconnectToken(code: string, playerId: string): string {
+    const token = crypto.randomUUID();
+    this.reconnectTokens.set(`${code.toUpperCase()}:${playerId}`, token);
+    return token;
+  }
+
+  getReconnectToken(code: string, playerId: string): string | undefined {
+    return this.reconnectTokens.get(`${code.toUpperCase()}:${playerId}`);
+  }
+
+  validateReconnectToken(code: string, playerId: string, token: string): boolean {
+    if (!token) return false;
+    const stored = this.reconnectTokens.get(`${code.toUpperCase()}:${playerId}`);
+    return stored === token;
+  }
+
+  rotateReconnectToken(code: string, oldPlayerId: string, newPlayerId: string, token: string): string | null {
+    if (!this.validateReconnectToken(code, oldPlayerId, token)) {
+      return null;
+    }
+    this.reconnectTokens.delete(`${code.toUpperCase()}:${oldPlayerId}`);
+    return this.createReconnectToken(code, newPlayerId);
+  }
+
+  saveTrackDraft(code: string, playerId: string, draft: Omit<Track, 'submittedByPlayerId'>): boolean {
+    const room = this.getRoom(code);
+    if (!room || room.phase !== 'MUSIC_SELECTION' || room.currentTurnPlayerId !== playerId) {
+      return false;
+    }
+    this.privateTrackDrafts.set(`${code.toUpperCase()}:${playerId}`, draft);
+    return true;
+  }
+
+  getTrackDraft(code: string, playerId: string): Omit<Track, 'submittedByPlayerId'> | undefined {
+    return this.privateTrackDrafts.get(`${code.toUpperCase()}:${playerId}`);
+  }
+
+  async hydrateFromPersistence(): Promise<number> {
+    try {
+      const persisted = await redisRoomStore.getAllPersistedRooms();
+      let count = 0;
+      for (const room of persisted) {
+        if (!this.rooms.has(room.code.toUpperCase())) {
+          this.rooms.set(room.code.toUpperCase(), room);
+          count++;
+        }
+      }
+      return count;
+    } catch (err) {
+      console.warn('[RoomStore] Persistence hydration failed:', err);
+      return 0;
+    }
   }
 
   createRoom(
@@ -96,6 +154,7 @@ class RoomStore {
     };
 
     this.rooms.set(code, room);
+    this.createReconnectToken(code, hostId);
     redisRoomStore.saveRoom(room).catch(() => {});
     return room;
   }
@@ -150,7 +209,7 @@ class RoomStore {
     return Array.from(this.rooms.values());
   }
 
-  joinRoom(code: string, playerId: string, nickname: string, avatar: string): { room?: RoomState; error?: string } {
+  joinRoom(code: string, playerId: string, nickname: string, avatar: string): { room?: RoomState; reconnectToken?: string; error?: string } {
     const room = this.getRoom(code);
     if (!room) {
       return { error: 'Sala não encontrada!' };
@@ -180,11 +239,12 @@ class RoomStore {
         isReady: false,
       };
       room.players.push(newPlayer);
+      this.createReconnectToken(room.code, playerId);
       this.addChatMessage(room.code, 'SYSTEM', 'WHO Bot', `${finalNickname} entrou na sala!`, true);
       redisRoomStore.saveRoom(room).catch(() => {});
     }
 
-    return { room };
+    return { room, reconnectToken: this.getReconnectToken(room.code, playerId) };
   }
 
   leaveRoom(code: string, playerId: string): { room?: RoomState; deleted?: boolean; error?: string } {
@@ -205,11 +265,24 @@ class RoomStore {
       delete room.guesserBets[playerId];
     }
 
+    this.reconnectTokens.delete(`${code.toUpperCase()}:${playerId}`);
+    this.privateTrackDrafts.delete(`${code.toUpperCase()}:${playerId}`);
+
     const remainingHumans = room.players.filter((p) => !p.isBot);
 
     // If no human players remain in the room, clean up and delete the room completely
     if (remainingHumans.length === 0) {
       this.rooms.delete(code.toUpperCase());
+      for (const key of Array.from(this.reconnectTokens.keys())) {
+        if (key.startsWith(`${code.toUpperCase()}:`)) {
+          this.reconnectTokens.delete(key);
+        }
+      }
+      for (const key of Array.from(this.privateTrackDrafts.keys())) {
+        if (key.startsWith(`${code.toUpperCase()}:`)) {
+          this.privateTrackDrafts.delete(key);
+        }
+      }
       redisRoomStore.deleteRoom(code).catch(() => {});
       return { deleted: true };
     }
@@ -335,8 +408,8 @@ class RoomStore {
     if (!currentTurnPlayer || !currentTurnPlayer.isBot) return room;
 
     // Pick a track from FEATURED_CATALOG not yet submitted in this room
-    const submittedTitles = new Set(room.submittedTracks.map((t) => t.title.toLowerCase()));
-    const available = FEATURED_CATALOG.filter((t) => !submittedTitles.has(t.title.toLowerCase()));
+    const submittedKeys = new Set(room.submittedTracks.map((t) => getTrackUniqueKey(t)));
+    const available = FEATURED_CATALOG.filter((t) => !submittedKeys.has(getTrackUniqueKey(t)));
     const chosen = available.length > 0
       ? available[Math.floor(Math.random() * available.length)]
       : FEATURED_CATALOG[Math.floor(Math.random() * FEATURED_CATALOG.length)];
@@ -353,7 +426,7 @@ class RoomStore {
       provider: 'preview',
     };
 
-    return this.submitTrack(code, currentTurnPlayer.id, botTrack);
+    return this.submitTrack(code, currentTurnPlayer.id, botTrack).room;
   }
 
   handleTurnTimeout(code: string): RoomState | undefined {
@@ -372,7 +445,22 @@ class RoomStore {
       };
     }
 
-    // 1. If player already selected a track, auto-confirm it!
+    // 1. Check if player saved a track draft on Confirmar Trecho
+    const draftKey = `${code.toUpperCase()}:${currentTurnPlayer.id}`;
+    const draft = this.privateTrackDrafts.get(draftKey);
+    if (draft) {
+      this.privateTrackDrafts.delete(draftKey);
+      this.addChatMessage(
+        room.code,
+        'SYSTEM',
+        'WHO Bot',
+        `Tempo esgotado! O trecho selecionado por ${currentTurnPlayer.nickname} foi confirmado automaticamente.`,
+        true
+      );
+      return this.submitTrack(code, currentTurnPlayer.id, draft).room;
+    }
+
+    // 2. If player already selected a track, auto-confirm it!
     if (currentTurnPlayer.selectedTrack) {
       this.addChatMessage(
         room.code,
@@ -381,12 +469,12 @@ class RoomStore {
         `Tempo esgotado! A seleção de ${currentTurnPlayer.nickname} foi confirmada automaticamente.`,
         true
       );
-      return this.submitTrack(code, currentTurnPlayer.id, currentTurnPlayer.selectedTrack);
+      return this.submitTrack(code, currentTurnPlayer.id, currentTurnPlayer.selectedTrack).room;
     }
 
-    // 2. Otherwise pick a fallback track from FEATURED_CATALOG
-    const submittedTitles = new Set(room.submittedTracks.map((t) => t.title.toLowerCase()));
-    const available = FEATURED_CATALOG.filter((t) => !submittedTitles.has(t.title.toLowerCase()));
+    // 3. Otherwise pick a unique fallback track from FEATURED_CATALOG
+    const submittedKeys = new Set(room.submittedTracks.map((t) => getTrackUniqueKey(t)));
+    const available = FEATURED_CATALOG.filter((t) => !submittedKeys.has(getTrackUniqueKey(t)));
     const chosen = available.length > 0
       ? available[Math.floor(Math.random() * available.length)]
       : FEATURED_CATALOG[Math.floor(Math.random() * FEATURED_CATALOG.length)];
@@ -411,7 +499,7 @@ class RoomStore {
       true
     );
 
-    return this.submitTrack(code, currentTurnPlayer.id, fallbackTrack);
+    return this.submitTrack(code, currentTurnPlayer.id, fallbackTrack).room;
   }
 
   advanceTurn(code: string): RoomState | undefined {
@@ -452,12 +540,24 @@ class RoomStore {
     return this.startPreGameCountdown(code);
   }
 
-  submitTrack(code: string, playerId: string, trackData: Omit<Track, 'submittedByPlayerId'>): RoomState | undefined {
+  submitTrack(
+    code: string,
+    playerId: string,
+    trackData: Omit<Track, 'submittedByPlayerId'>
+  ): { room?: RoomState; error?: string } {
     const room = this.getRoom(code);
-    if (!room) return undefined;
+    if (!room) return { error: 'Sala não encontrada.' };
 
     const player = room.players.find((p) => p.id === playerId);
-    if (!player) return undefined;
+    if (!player) return { error: 'Jogador não encontrado na sala.' };
+
+    const newKey = getTrackUniqueKey(trackData);
+    const isDuplicate = room.submittedTracks.some(
+      (t) => t.submittedByPlayerId !== playerId && getTrackUniqueKey(t) === newKey
+    );
+    if (isDuplicate) {
+      return { error: 'TRACK_ALREADY_SELECTED' };
+    }
 
     const clipDuration = room.settings?.clipDurationSeconds || 30;
     let startSec = Math.max(0, trackData.startTimeSeconds || 0);
@@ -480,6 +580,7 @@ class RoomStore {
     };
 
     player.selectedTrack = track;
+    this.privateTrackDrafts.delete(`${code.toUpperCase()}:${playerId}`);
 
     // Filter existing submission from same player if re-submitting
     room.submittedTracks = room.submittedTracks.filter((t) => t.submittedByPlayerId !== playerId);
@@ -487,10 +588,10 @@ class RoomStore {
 
     // If submitted during turn sequence, advance turn
     if (room.phase === 'MUSIC_SELECTION') {
-      return this.advanceTurn(code);
+      return { room: this.advanceTurn(code) };
     }
 
-    return room;
+    return { room };
   }
 
   startBettingRound(code: string): RoomState | undefined {
@@ -524,17 +625,18 @@ class RoomStore {
       [room.submittedTracks[i], room.submittedTracks[j]] = [room.submittedTracks[j], room.submittedTracks[i]];
     }
 
-    room.totalRounds = Math.max(room.totalRounds, room.submittedTracks.length);
+    room.totalRounds = room.submittedTracks.length;
     room.currentRound = 1;
     room.phase = 'BETTING';
     const duration = room.settings?.bettingTimeSeconds || 30;
     room.roundDurationSeconds = duration;
     room.timeRemainingSeconds = duration;
 
-    // Record pre-bet starting balances for risk calculations
+    // Record pre-bet starting balances for risk calculations and reset reserved chips
     room.startingBalances = {};
     room.players.forEach((p) => {
       room.startingBalances![p.id] = p.chips;
+      p.reservedChips = 0;
     });
     room.revealStage = undefined;
     room.revealIndex = undefined;
@@ -597,6 +699,10 @@ class RoomStore {
     const room = this.getRoom(code);
     if (!room) return { accepted: false, error: 'Sala não encontrada.' };
 
+    if (room.settings?.enableOwnerPrediction === false) {
+      return { accepted: false, error: 'Previsões do dono estão desativadas nesta sala.' };
+    }
+
     const player = room.players.find((p) => p.id === ownerId);
     if (!player) return { accepted: false, error: 'Jogador não encontrado.' };
 
@@ -633,6 +739,7 @@ class RoomStore {
     );
 
     const validatedChipAmount = Math.max(0, Math.min(normalized.chipAmount, availableBalance));
+    player.reservedChips = validatedChipAmount;
 
     const finalBet: OwnerBet = {
       ownerId,
@@ -681,15 +788,35 @@ class RoomStore {
     const player = room.players.find((p) => p.id === guesserId);
     if (!player) return { accepted: false, code: 'PLAYER_NOT_FOUND', error: 'Jogador não encontrado.' };
 
-    const startingBalance = room.startingBalances?.[guesserId] ?? player.chips;
-    if (chipAmount <= 0) {
-      return { accepted: false, code: 'INVALID_BET', error: 'O valor da aposta deve ser maior que zero.' };
+    if (room.currentTrack?.submittedByPlayerId === guesserId) {
+      return { accepted: false, code: 'INVALID_BET', error: 'O dono da música não pode apostar como adivinhador.' };
     }
-    if (chipAmount > startingBalance) {
+
+    if (targetOwnerId === guesserId) {
+      return { accepted: false, code: 'INVALID_BET', error: 'Você não pode apostar em você mesmo.' };
+    }
+
+    const targetPlayer = room.players.find((p) => p.id === targetOwnerId);
+    if (!targetPlayer) {
+      return { accepted: false, code: 'INVALID_BET', error: 'Jogador suspeito inválido.' };
+    }
+
+    if (!Number.isInteger(chipAmount) || chipAmount <= 0) {
+      return {
+        accepted: false,
+        code: 'INVALID_BET',
+        error: 'O valor da aposta deve ser um número inteiro maior que zero.',
+      };
+    }
+
+    const baseBalance = room.startingBalances?.[guesserId] ?? player.chips;
+    const availableBalance = baseBalance - (player.reservedChips || 0);
+
+    if (chipAmount > availableBalance) {
       return {
         accepted: false,
         code: 'INSUFFICIENT_CHIPS',
-        error: `Saldo insuficiente. Você possui ${startingBalance} fichas.`,
+        error: `Saldo insuficiente. Disponível: ${availableBalance} fichas.`,
       };
     }
 
@@ -707,7 +834,7 @@ class RoomStore {
       room,
       accepted: true,
       stake: chipAmount,
-      remainingBalance: startingBalance - chipAmount,
+      remainingBalance: availableBalance - chipAmount,
     };
   }
 
@@ -815,7 +942,11 @@ class RoomStore {
       const p = room.players.find((player) => player.id === summary.playerId);
       if (p) {
         p.chips = summary.endingChips;
+        p.reservedChips = 0;
       }
+    });
+    room.players.forEach((p) => {
+      p.reservedChips = 0;
     });
 
     this.addChatMessage(
@@ -862,10 +993,11 @@ class RoomStore {
     const ownerId = room.currentTrack.submittedByPlayerId;
     room.ownerBet = room.pendingOwnerBets?.[ownerId];
 
-    // Record pre-bet starting balances for risk calculations
+    // Record pre-bet starting balances for risk calculations and reset reserved chips
     room.startingBalances = {};
     room.players.forEach((p) => {
       room.startingBalances![p.id] = p.chips;
+      p.reservedChips = 0;
     });
     room.revealStage = undefined;
     room.revealIndex = undefined;
@@ -938,10 +1070,18 @@ class RoomStore {
     const room = this.getRoom(code);
     if (!room) return undefined;
 
-    // During LOBBY and GAME_OVER, full state can be displayed
-    if (room.phase === 'LOBBY' || room.phase === 'GAME_OVER') {
+    // During GAME_OVER, full state can be displayed
+    if (room.phase === 'GAME_OVER') {
       return room;
     }
+
+    const sanitizedPlayers = room.players.map((p) => {
+      if (p.id === forPlayerId || room.phase === 'GAME_OVER') {
+        return p;
+      }
+      const { selectedTrack, ...safePlayer } = p;
+      return safePlayer as Player;
+    });
 
     const isOwner = room.currentTrack?.submittedByPlayerId === forPlayerId;
 
@@ -961,11 +1101,46 @@ class RoomStore {
         }
       : undefined;
 
-    const sanitizedSubmittedTracks = room.submittedTracks.map((t) => ({
-      ...t,
-      submittedByPlayerId:
-        shouldRevealOwner || t.submittedByPlayerId === forPlayerId ? t.submittedByPlayerId : 'SECRET_OWNER',
-    }));
+    let sanitizedSubmittedTracks = room.submittedTracks;
+
+    if (room.phase === 'MUSIC_SELECTION') {
+      sanitizedSubmittedTracks = room.submittedTracks.map((t) => {
+        if (t.submittedByPlayerId === forPlayerId) {
+          return t;
+        }
+        return {
+          id: 'submitted-secret',
+          title: 'Faixa Secreta',
+          artist: 'Artista Secreto',
+          audioUrl: '',
+          submittedByPlayerId: 'SECRET_OWNER',
+        };
+      });
+    } else if (
+      room.phase === 'BETTING' ||
+      room.phase === 'BET_LOCKED' ||
+      room.phase === 'REVEAL'
+    ) {
+      sanitizedSubmittedTracks = room.submittedTracks.map((t, idx) => {
+        const isCurrentOrPast = idx < (room.currentRound ?? 1);
+        if (isCurrentOrPast) {
+          return {
+            ...t,
+            submittedByPlayerId:
+              shouldRevealOwner || t.submittedByPlayerId === forPlayerId ? t.submittedByPlayerId : 'SECRET_OWNER',
+          };
+        }
+        return {
+          id: 'future-secret',
+          title: 'Faixa Futura',
+          artist: 'Artista Secreto',
+          audioUrl: '',
+          submittedByPlayerId: 'SECRET_OWNER',
+        };
+      });
+    } else if (room.phase === 'LOBBY' || room.phase === 'COUNTDOWN') {
+      sanitizedSubmittedTracks = [];
+    }
 
     // 2. Guesser Bets masking:
     const sanitizedGuesserBets: Record<string, GuesserBet> = {};
@@ -1040,6 +1215,7 @@ class RoomStore {
 
     return {
       ...room,
+      players: sanitizedPlayers,
       currentTrack: sanitizedCurrentTrack,
       submittedTracks: sanitizedSubmittedTracks,
       guesserBets: sanitizedGuesserBets,

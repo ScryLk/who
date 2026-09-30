@@ -75,6 +75,7 @@ export interface Player {
   isHost: boolean;
   isBot?: boolean;
   isReady: boolean;
+  reservedChips?: number;
   selectedTrack?: Track;
 }
 

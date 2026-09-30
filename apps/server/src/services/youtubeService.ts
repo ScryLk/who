@@ -151,8 +151,8 @@ export async function searchYouTubeVideos(
   }
 
   try {
-    // 1. Search for embeddable video IDs
-    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=${maxResults}&q=${encodeURIComponent(
+    // 1. Search for embeddable music video IDs
+    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoCategoryId=10&maxResults=${maxResults}&q=${encodeURIComponent(
       trimmed
     )}&key=${apiKey}`;
 

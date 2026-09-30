@@ -10,15 +10,24 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import { setupSocketHandlers } from './sockets/gameHandler';
 import { searchTracks } from './services/musicService';
+import { roomStore } from './services/roomStore';
 
 const app = express();
-app.use(cors({ origin: '*' }));
+
+const rawClientOrigin = process.env.CLIENT_ORIGIN;
+const clientOrigin = rawClientOrigin
+  ? rawClientOrigin.includes(',')
+    ? rawClientOrigin.split(',').map((o) => o.trim())
+    : rawClientOrigin.trim()
+  : '*';
+
+app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: clientOrigin,
     methods: ['GET', 'POST'],
   },
 });
@@ -39,9 +48,25 @@ app.get('/api/search-tracks', async (req, res) => {
   }
 });
 
-setupSocketHandlers(io);
+async function startServer() {
+  try {
+    const hydratedCount = await roomStore.hydrateFromPersistence();
+    if (hydratedCount > 0) {
+      console.log(`[PERSISTENCE] Successfully hydrated ${hydratedCount} rooms from persistence.`);
+    }
+  } catch (err) {
+    console.warn('[PERSISTENCE] Error during initial hydration:', err);
+  }
 
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`[SERVER] WHO Server running on http://localhost:${PORT}`);
+  setupSocketHandlers(io);
+
+  const PORT = process.env.PORT || 4000;
+  server.listen(PORT, () => {
+    console.log(`[SERVER] WHO Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('[SERVER FATAL] Failed to start server:', err);
+  process.exit(1);
 });

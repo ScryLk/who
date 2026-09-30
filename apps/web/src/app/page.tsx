@@ -55,16 +55,24 @@ export default function Home() {
       // Check for active existing session in localStorage
       const savedPlayerId = localStorage.getItem('who_player_id');
       const savedRoomCode = localStorage.getItem('who_room_code');
+      const savedToken = localStorage.getItem('who_reconnect_token');
       if (savedPlayerId && savedRoomCode) {
         socket.emit(
           'reconnect_session',
-          { roomCode: savedRoomCode, previousPlayerId: savedPlayerId },
+          { roomCode: savedRoomCode, previousPlayerId: savedPlayerId, reconnectToken: savedToken || undefined },
           (res: any) => {
             if (res && res.success && res.room) {
               setRoom(res.room);
               setMyPlayerId(res.playerId);
               localStorage.setItem('who_player_id', res.playerId);
               localStorage.setItem('who_room_code', res.room.code);
+              if (res.reconnectToken) {
+                localStorage.setItem('who_reconnect_token', res.reconnectToken);
+              }
+            } else {
+              localStorage.removeItem('who_player_id');
+              localStorage.removeItem('who_room_code');
+              localStorage.removeItem('who_reconnect_token');
             }
           }
         );
@@ -99,6 +107,9 @@ export default function Home() {
           if (typeof window !== 'undefined') {
             localStorage.setItem('who_player_id', res.playerId);
             localStorage.setItem('who_room_code', res.room.code);
+            if (res.reconnectToken) {
+              localStorage.setItem('who_reconnect_token', res.reconnectToken);
+            }
           }
           setIsCreateModalOpen(false);
         } else {
@@ -124,6 +135,9 @@ export default function Home() {
           if (typeof window !== 'undefined') {
             localStorage.setItem('who_player_id', res.playerId);
             localStorage.setItem('who_room_code', res.room.code);
+            if (res.reconnectToken) {
+              localStorage.setItem('who_reconnect_token', res.reconnectToken);
+            }
           }
           setIsJoinModalOpen(false);
         } else {
@@ -222,6 +236,7 @@ export default function Home() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('who_player_id');
       localStorage.removeItem('who_room_code');
+      localStorage.removeItem('who_reconnect_token');
     }
     if (room) {
       const socket = getSocket();

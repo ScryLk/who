@@ -16,12 +16,14 @@
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "check-types": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts",
     "clean": "rm -rf dist .turbo"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
     "@who/config-typescript": "workspace:*",
     "tsup": "^8.0.2",
+    "tsx": "^4.10.3",
     "typescript": "^5.4.5"
   },
   "dependencies": {

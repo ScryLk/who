@@ -102,10 +102,10 @@ describe('Server Music and YouTube Service Tests', () => {
         endTimeSeconds: 999, // Attempted invalid client value
       };
 
-      const updatedRoom = roomStore.submitTrack(room.code, 'host-1', ytTrack);
-      assert.ok(updatedRoom);
+      const submitRes = roomStore.submitTrack(room.code, 'host-1', ytTrack);
+      assert.ok(submitRes.room);
 
-      const submitted = updatedRoom.submittedTracks[0];
+      const submitted = submitRes.room.submittedTracks[0];
       assert.ok(submitted);
       assert.equal(submitted.startTimeSeconds, 120);
       // Server must override client's 999 with 120 + 30 = 150
@@ -130,10 +130,10 @@ describe('Server Music and YouTube Service Tests', () => {
         startTimeSeconds: 190,
       };
 
-      const updatedRoom = roomStore.submitTrack(room.code, 'host-2', ytTrack);
-      assert.ok(updatedRoom);
+      const submitRes = roomStore.submitTrack(room.code, 'host-2', ytTrack);
+      assert.ok(submitRes.room);
 
-      const submitted = updatedRoom.submittedTracks[0];
+      const submitted = submitRes.room.submittedTracks[0];
       assert.ok(submitted);
       // Clamped to 200 - 30 = 170
       assert.equal(submitted.startTimeSeconds, 170);

@@ -1184,7 +1184,19 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                               previewAudioRef.current.pause();
                               setIsPlayingPreview(false);
                             }
-                            setActiveSelectionTab('PREDICTION');
+                            const trackDraft = {
+                              ...selectedTrack,
+                              startTimeSeconds: startTimeSeconds || selectedTrack.startTimeSeconds || 0,
+                              endTimeSeconds: (startTimeSeconds || 0) + clipDuration,
+                            };
+                            const socket = getSocket();
+                            socket.emit('save_track_draft', { roomCode: room.code, track: trackDraft });
+
+                            if (room.settings?.enableOwnerPrediction === false) {
+                              handleConfirmChoice();
+                            } else {
+                              setActiveSelectionTab('PREDICTION');
+                            }
                           }}
                           className={`px-5 py-2.5 rounded-2xl font-black text-xs transition shadow-glow-yellow flex items-center justify-center gap-2 cursor-pointer ${
                             !isAudioReady
@@ -1193,7 +1205,11 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                           }`}
                         >
                           <span>
-                            {!isAudioReady ? 'Carregando trecho...' : 'Confirmar Trecho →'}
+                            {!isAudioReady
+                              ? 'Carregando trecho...'
+                              : room.settings?.enableOwnerPrediction === false
+                              ? 'Confirmar Escolha'
+                              : 'Confirmar Trecho →'}
                           </span>
                           <ArrowRight className="w-4 h-4" />
                         </button>
@@ -1528,270 +1544,324 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                   </div>
                 )}
 
-                {/* Suspects Grid: Seated Players to Deduce */}
-                <div className="space-y-2 flex-1">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-xs font-bold text-yellow-300 flex items-center gap-1.5">
-                      <Zap className="w-3.5 h-3.5" />
-                      <span>Quem é o dono desta música? Clique para selecionar o suspeito:</span>
-                    </span>
-                    {selectedOwnerId && (
-                      <span className="text-[11px] text-cyan-300 font-bold">
-                        Suspeito: {room.players.find((p) => p.id === selectedOwnerId)?.nickname}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                    {room.players.map((p) => {
-                      const isSelected = selectedOwnerId === p.id;
-                      const hasBet = room.guesserBets?.[p.id] !== undefined;
-
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => {
-                            if (room.guesserBets?.[myPlayerId]) return;
-                            playChipSound();
-                            setSelectedOwnerId(p.id);
-                            if (betErrorMessage) setBetErrorMessage(null);
-                          }}
-                          disabled={!!room.guesserBets?.[myPlayerId]}
-                          className={`p-2.5 rounded-2xl border transition-all flex flex-col items-center gap-1 text-center relative ${
-                            isSelected
-                              ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow scale-105 font-black'
-                              : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
-                          } ${room.guesserBets?.[myPlayerId] ? 'cursor-default' : 'cursor-pointer'}`}
-                        >
-                          <PlayerAvatar avatar={p.avatar} size="sm" />
-                          <span className="text-[11px] truncate max-w-[90px]">
-                            {p.nickname} {p.id === myPlayerId && '(Você)'}
-                          </span>
-                          <span className="text-[10px] font-bold text-yellow-300 flex items-center gap-0.5">
-                            <Coins className="w-3 h-3" /> {p.chips}
-                          </span>
-
-                          {isSelected && (
-                            <span className="absolute -top-2 px-2 py-0.5 rounded-full bg-slate-950 text-yellow-300 border border-yellow-400 text-[8px] font-black tracking-wider">
-                              SUSPEITO
-                            </span>
-                          )}
-
-                          {/* Safe Player Betting Status (Zero Leak) */}
-                          <div className="absolute top-1 right-1">
-                            {hasBet ? (
-                              <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[8px] font-black flex items-center gap-0.5" title="Apostou">
-                                <Check className="w-2.5 h-2.5 stroke-[3]" />
-                                <span className="hidden sm:inline">APOSTOU</span>
-                              </span>
-                            ) : (
-                              <span className="px-1.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 text-[8px] font-bold flex items-center gap-1" title="Pensando">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                                <span className="hidden sm:inline">PENSANDO</span>
-                              </span>
-                            )}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Bottom Bet Action Bar / Confirmed State */}
-                {room.guesserBets?.[myPlayerId] ? (
-                  <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 text-center space-y-2">
-                    <div className="flex items-center justify-center gap-2 text-emerald-400 font-extrabold text-sm">
-                      <Check className="w-4 h-4 stroke-[3]" />
-                      <span>Palpite Registrado com Sucesso!</span>
+                {/* Active Round Arena: Owner Spectator Mode vs Guesser Deduction Arena */}
+                {room.currentTrack?.submittedByPlayerId === myPlayerId ? (
+                  <div className="flex-1 flex flex-col justify-center items-center text-center p-6 rounded-3xl bg-slate-900/60 border border-purple-400/20 shadow-xl space-y-4 my-auto">
+                    <div className="w-16 h-16 rounded-2xl bg-amber-400/20 border border-amber-400/30 text-amber-300 flex items-center justify-center font-black">
+                      <Music className="w-8 h-8" />
                     </div>
-                    <p className="text-xs text-slate-300">
-                      Você colocou <strong className="text-amber-400 font-mono">{room.guesserBets[myPlayerId].chipAmount} fichas</strong> em{' '}
-                      <strong className="text-white">
-                        {room.players.find((p) => p.id === room.guesserBets[myPlayerId].targetOwnerId)?.nickname || 'Suspeito'}
-                      </strong>.
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Aguardando os demais participantes confirmarem suas decisões...
-                    </p>
+                    <div className="space-y-1 max-w-md">
+                      <h3 className="text-lg font-black text-white">Sua música está tocando na mesa!</h3>
+                      <p className="text-xs text-slate-300">
+                        Relaxe e observe os outros jogadores tentando deduzir quem é o dono. Sua identidade secreta está protegida até a etapa de revelação.
+                      </p>
+                    </div>
+
+                    <div className="w-full max-w-lg pt-2">
+                      <span className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-2">
+                        Status das Deduções dos Participantes:
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {room.players
+                          .filter((p) => p.id !== myPlayerId)
+                          .map((p) => {
+                            const hasBet = room.guesserBets?.[p.id] !== undefined;
+                            return (
+                              <div
+                                key={p.id}
+                                className="p-2 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-2"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <PlayerAvatar avatar={p.avatar} size="sm" />
+                                  <span className="text-xs font-semibold text-white truncate max-w-[80px]">
+                                    {p.nickname}
+                                  </span>
+                                </div>
+                                {hasBet ? (
+                                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[8px] font-bold">
+                                    APOSTOU
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[8px] font-bold">
+                                    PENSANDO
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
                   </div>
                 ) : (
-                  <div
-                    className={`p-3 rounded-2xl bg-white/5 border transition-all duration-200 space-y-2.5 ${
-                      betShake
-                        ? 'animate-shake border-red-500/50 shadow-[0_0_20px_rgba(239,68,68,0.25)]'
-                        : 'border-white/10'
-                    }`}
-                  >
-                    {/* Header: Title + Quick actions (Limpar / MÁX.) */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-blue-200 flex items-center gap-1">
-                        <Coins className="w-3.5 h-3.5 text-yellow-300" /> Valor da aposta:
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (chipBet === 0) return;
-                            playChipSound();
-                            setChipBet(0);
-                            if (betErrorMessage) setBetErrorMessage(null);
-                          }}
-                          disabled={chipBet === 0}
-                          title="Limpar valor da aposta"
-                          className="px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-1"
-                        >
-                          <RotateCcw className="w-2.5 h-2.5" />
-                          <span>Limpar</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (myAvailableBalance <= 0) {
-                              triggerBlockedFeedback('Você não possui fichas disponíveis nesta rodada.');
-                              return;
-                            }
-                            playChipSound();
-                            setChipBet(myAvailableBalance);
-                            if (betErrorMessage) setBetErrorMessage(null);
-                          }}
-                          disabled={myAvailableBalance <= 0}
-                          title="Apostar todo o saldo disponível (All-In)"
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-black border transition ${
-                            chipBet === myAvailableBalance && myAvailableBalance > 0
-                              ? 'bg-rose-500 text-white border-rose-400 shadow-glow-pink'
-                              : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border-rose-500/30'
-                          } disabled:opacity-30 disabled:cursor-not-allowed`}
-                        >
-                          MÁX.
-                        </button>
+                  <>
+                    {/* Suspects Grid: Seated Players to Deduce (excluding self) */}
+                    <div className="space-y-2 flex-1">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-xs font-bold text-yellow-300 flex items-center gap-1.5">
+                          <Zap className="w-3.5 h-3.5" />
+                          <span>Quem é o dono desta música? Clique para selecionar o suspeito:</span>
+                        </span>
+                        {selectedOwnerId && (
+                          <span className="text-[11px] text-cyan-300 font-bold">
+                            Suspeito: {room.players.find((p) => p.id === selectedOwnerId)?.nickname}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                        {room.players
+                          .filter((p) => p.id !== myPlayerId)
+                          .map((p) => {
+                            const isSelected = selectedOwnerId === p.id;
+                            const hasBet = room.guesserBets?.[p.id] !== undefined;
+
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => {
+                                  if (room.guesserBets?.[myPlayerId]) return;
+                                  playChipSound();
+                                  setSelectedOwnerId(p.id);
+                                  if (betErrorMessage) setBetErrorMessage(null);
+                                }}
+                                disabled={!!room.guesserBets?.[myPlayerId]}
+                                className={`p-2.5 rounded-2xl border transition-all flex flex-col items-center gap-1 text-center relative ${
+                                  isSelected
+                                    ? 'bg-yellow-400 text-slate-950 border-yellow-200 shadow-glow-yellow scale-105 font-black'
+                                    : 'bg-white/10 hover:bg-white/20 border-white/15 text-white font-semibold'
+                                } ${room.guesserBets?.[myPlayerId] ? 'cursor-default' : 'cursor-pointer'}`}
+                              >
+                                <PlayerAvatar avatar={p.avatar} size="sm" />
+                                <span className="text-[11px] truncate max-w-[90px]">
+                                  {p.nickname}
+                                </span>
+                                <span className="text-[10px] font-bold text-yellow-300 flex items-center gap-0.5">
+                                  <Coins className="w-3 h-3" /> {p.chips}
+                                </span>
+
+                                {isSelected && (
+                                  <span className="absolute -top-2 px-2 py-0.5 rounded-full bg-slate-950 text-yellow-300 border border-yellow-400 text-[8px] font-black tracking-wider">
+                                    SUSPEITO
+                                  </span>
+                                )}
+
+                                {/* Safe Player Betting Status (Zero Leak) */}
+                                <div className="absolute top-1 right-1">
+                                  {hasBet ? (
+                                    <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[8px] font-black flex items-center gap-0.5" title="Apostou">
+                                      <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                      <span className="hidden sm:inline">APOSTOU</span>
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400 text-[8px] font-bold flex items-center gap-1" title="Pensando">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                      <span className="hidden sm:inline">PENSANDO</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
                       </div>
                     </div>
 
-                    {/* Stepper & Increments Row */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {/* Decrement Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (chipBet <= 0) {
-                            triggerBlockedFeedback('Aposta já está em zero fichas.');
-                            return;
-                          }
-                          playChipSound();
-                          setChipBet((prev) => Math.max(0, prev - 50));
-                          if (betErrorMessage) setBetErrorMessage(null);
-                        }}
-                        disabled={chipBet <= 0}
-                        title="Diminuir 50 fichas"
-                        className="px-2.5 py-1 rounded-xl text-xs font-extrabold border transition bg-white/10 hover:bg-white/20 border-white/20 text-white disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-0.5"
+                    {/* Bottom Bet Action Bar / Confirmed State */}
+                    {room.guesserBets?.[myPlayerId] ? (
+                      <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 text-center space-y-2">
+                        <div className="flex items-center justify-center gap-2 text-emerald-400 font-extrabold text-sm">
+                          <Check className="w-4 h-4 stroke-[3]" />
+                          <span>Palpite Registrado com Sucesso!</span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          Você colocou <strong className="text-amber-400 font-mono">{room.guesserBets[myPlayerId].chipAmount} fichas</strong> em{' '}
+                          <strong className="text-white">
+                            {room.players.find((p) => p.id === room.guesserBets[myPlayerId].targetOwnerId)?.nickname || 'Suspeito'}
+                          </strong>.
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          Aguardando os demais participantes confirmarem suas decisões...
+                        </p>
+                      </div>
+                    ) : (
+                      <div
+                        className={`p-3 rounded-2xl bg-white/5 border transition-all duration-200 space-y-2.5 ${
+                          betShake
+                            ? 'animate-shake border-red-500/50 shadow-[0_0_20px_rgba(239,68,68,0.25)]'
+                            : 'border-white/10'
+                        }`}
                       >
-                        <Minus className="w-3 h-3 stroke-[3]" />
-                        <span>50</span>
-                      </button>
+                        {/* Header: Title + Quick actions (Limpar / MÁX.) */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-blue-200 flex items-center gap-1">
+                            <Coins className="w-3.5 h-3.5 text-yellow-300" /> Valor da aposta:
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (chipBet === 0) return;
+                                playChipSound();
+                                setChipBet(0);
+                                if (betErrorMessage) setBetErrorMessage(null);
+                              }}
+                              disabled={chipBet === 0}
+                              title="Limpar valor da aposta"
+                              className="px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-1"
+                            >
+                              <RotateCcw className="w-2.5 h-2.5" />
+                              <span>Limpar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (myAvailableBalance <= 0) {
+                                  triggerBlockedFeedback('Você não possui fichas disponíveis nesta rodada.');
+                                  return;
+                                }
+                                playChipSound();
+                                setChipBet(myAvailableBalance);
+                                if (betErrorMessage) setBetErrorMessage(null);
+                              }}
+                              disabled={myAvailableBalance <= 0}
+                              title="Apostar todo o saldo disponível (All-In)"
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-black border transition ${
+                                chipBet === myAvailableBalance && myAvailableBalance > 0
+                                  ? 'bg-rose-500 text-white border-rose-400 shadow-glow-pink'
+                                  : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border-rose-500/30'
+                              } disabled:opacity-30 disabled:cursor-not-allowed`}
+                            >
+                              MÁX.
+                            </button>
+                          </div>
+                        </div>
 
-                      {/* Incremental Bet Buttons (+50, +100, +200, +500) */}
-                      {[50, 100, 200, 500].map((amt) => {
-                        const canAfford = canAffordBetIncrement(chipBet, amt, myAvailableBalance);
-                        return (
+                        {/* Stepper & Increments Row */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {/* Decrement Button */}
                           <button
-                            key={amt}
                             type="button"
                             onClick={() => {
-                              if (!canAfford) {
-                                triggerBlockedFeedback(
-                                  `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
-                                );
+                              if (chipBet <= 0) {
+                                triggerBlockedFeedback('Aposta já está em zero fichas.');
                                 return;
                               }
                               playChipSound();
-                              setChipBet((prev) => prev + amt);
+                              setChipBet((prev) => Math.max(0, prev - 50));
                               if (betErrorMessage) setBetErrorMessage(null);
                             }}
-                            aria-disabled={!canAfford}
-                            className={`px-3 py-1 rounded-xl text-xs font-extrabold border transition ${
-                              canAfford
-                                ? 'bg-white/10 hover:bg-white/20 border-white/20 text-white active:scale-95 cursor-pointer'
-                                : 'bg-white/5 border-red-500/20 text-slate-500 cursor-not-allowed opacity-40 hover:border-red-500/40'
-                            }`}
+                            disabled={chipBet <= 0}
+                            title="Diminuir 50 fichas"
+                            className="px-2.5 py-1 rounded-xl text-xs font-extrabold border transition bg-white/10 hover:bg-white/20 border-white/20 text-white disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-0.5"
                           >
-                            +{amt}
+                            <Minus className="w-3 h-3 stroke-[3]" />
+                            <span>50</span>
                           </button>
-                        );
-                      })}
-                    </div>
 
-                    {/* Contextual Error Message Banner */}
-                    {betErrorMessage && (
-                      <div
-                        role="alert"
-                        aria-live="polite"
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs font-medium animate-in fade-in slide-in-from-top-1 duration-150"
-                      >
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                        <span>{betErrorMessage}</span>
+                          {/* Incremental Bet Buttons (+50, +100, +200, +500) */}
+                          {[50, 100, 200, 500].map((amt) => {
+                            const canAfford = canAffordBetIncrement(chipBet, amt, myAvailableBalance);
+                            return (
+                              <button
+                                key={amt}
+                                type="button"
+                                onClick={() => {
+                                  if (!canAfford) {
+                                    triggerBlockedFeedback(
+                                      `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
+                                    );
+                                    return;
+                                  }
+                                  playChipSound();
+                                  setChipBet((prev) => prev + amt);
+                                  if (betErrorMessage) setBetErrorMessage(null);
+                                }}
+                                aria-disabled={!canAfford}
+                                className={`px-3 py-1 rounded-xl text-xs font-extrabold border transition ${
+                                  canAfford
+                                    ? 'bg-white/10 hover:bg-white/20 border-white/20 text-white active:scale-95 cursor-pointer'
+                                    : 'bg-white/5 border-red-500/20 text-slate-500 cursor-not-allowed opacity-40 hover:border-red-500/40'
+                                }`}
+                              >
+                                +{amt}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Contextual Error Message Banner */}
+                        {betErrorMessage && (
+                          <div
+                            role="alert"
+                            aria-live="polite"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs font-medium animate-in fade-in slide-in-from-top-1 duration-150"
+                          >
+                            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            <span>{betErrorMessage}</span>
+                          </div>
+                        )}
+
+                        {/* Live Bet Risk Indicator */}
+                        <BetRiskIndicator
+                          stake={chipBet}
+                          balanceBeforeBet={myAvailableBalance}
+                        />
+
+                        {/* Confirm Button */}
+                        {(() => {
+                          const isOverBalance = chipBet > myAvailableBalance;
+                          const isZeroBet = chipBet <= 0;
+                          const hasSelectedSuspect = Boolean(selectedOwnerId);
+                          const isBetValid = hasSelectedSuspect && !isZeroBet && !isOverBalance;
+
+                          let buttonLabel = `Confirmar Palpite (${chipBet} Fichas)`;
+                          if (!hasSelectedSuspect) {
+                            buttonLabel = 'Selecione um Suspeito acima';
+                          } else if (isZeroBet) {
+                            buttonLabel = 'Defina o valor da aposta (mín. 50)';
+                          } else if (isOverBalance) {
+                            buttonLabel = `Saldo Insuficiente (Máx: ${myAvailableBalance})`;
+                          }
+
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!hasSelectedSuspect) {
+                                  triggerBlockedFeedback('Selecione um suspeito para apostar.');
+                                  return;
+                                }
+                                if (isZeroBet) {
+                                  triggerBlockedFeedback('Defina um valor maior que zero para apostar.');
+                                  return;
+                                }
+                                if (isOverBalance) {
+                                  triggerBlockedFeedback(
+                                    `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
+                                  );
+                                  return;
+                                }
+                                playChipSound();
+                                if (onPlaceGuesserBet) {
+                                  onPlaceGuesserBet(selectedOwnerId, chipBet);
+                                }
+                                setSubmittedBet(true);
+                              }}
+                              disabled={!isBetValid}
+                              className={`w-full py-3.5 rounded-2xl font-black text-sm transition flex items-center justify-center gap-2 shadow-xl border ${
+                                !isBetValid
+                                  ? 'bg-slate-800/80 border-slate-700/80 text-slate-500 cursor-not-allowed'
+                                  : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950 shadow-glow-green active:scale-95'
+                              }`}
+                            >
+                              <Check className="w-4 h-4 stroke-[3]" />
+                              <span>{buttonLabel}</span>
+                            </button>
+                          );
+                        })()}
                       </div>
                     )}
-
-                    {/* Live Bet Risk Indicator */}
-                    <BetRiskIndicator
-                      stake={chipBet}
-                      balanceBeforeBet={myAvailableBalance}
-                    />
-
-                    {/* Confirm Button */}
-                    {(() => {
-                      const isOverBalance = chipBet > myAvailableBalance;
-                      const isZeroBet = chipBet <= 0;
-                      const hasSelectedSuspect = Boolean(selectedOwnerId);
-                      const isBetValid = hasSelectedSuspect && !isZeroBet && !isOverBalance;
-
-                      let buttonLabel = `Confirmar Palpite (${chipBet} Fichas)`;
-                      if (!hasSelectedSuspect) {
-                        buttonLabel = 'Selecione um Suspeito acima';
-                      } else if (isZeroBet) {
-                        buttonLabel = 'Defina o valor da aposta (mín. 50)';
-                      } else if (isOverBalance) {
-                        buttonLabel = `Saldo Insuficiente (Máx: ${myAvailableBalance})`;
-                      }
-
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!hasSelectedSuspect) {
-                              triggerBlockedFeedback('Selecione um suspeito para apostar.');
-                              return;
-                            }
-                            if (isZeroBet) {
-                              triggerBlockedFeedback('Defina um valor maior que zero para apostar.');
-                              return;
-                            }
-                            if (isOverBalance) {
-                              triggerBlockedFeedback(
-                                `Saldo insuficiente. Máximo disponível: ${myAvailableBalance} fichas.`
-                              );
-                              return;
-                            }
-                            playChipSound();
-                            if (onPlaceGuesserBet) {
-                              onPlaceGuesserBet(selectedOwnerId, chipBet);
-                            }
-                            setSubmittedBet(true);
-                          }}
-                          disabled={!isBetValid}
-                          className={`w-full py-3.5 rounded-2xl font-black text-sm transition flex items-center justify-center gap-2 shadow-xl border ${
-                            !isBetValid
-                              ? 'bg-slate-800/80 border-slate-700/80 text-slate-500 cursor-not-allowed'
-                              : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-300 text-slate-950 shadow-glow-green active:scale-95'
-                          }`}
-                        >
-                          <Check className="w-4 h-4 stroke-[3]" />
-                          <span>{buttonLabel}</span>
-                        </button>
-                      );
-                    })()}
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -1916,18 +1986,32 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
                     <span>+ Bot</span>
                   </button>
 
-                  <button
-                    onClick={onStartGame}
-                    disabled={room.players.length < 2}
-                    className={`px-6 py-2 rounded-xl font-black text-xs transition flex items-center gap-2 border ${
-                      room.players.length >= 2
-                        ? 'bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 text-white shadow-glow-pink cursor-pointer'
-                        : 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Iniciar Partida</span>
-                  </button>
+                  {(() => {
+                    const allHumansReady = room.players.filter((p) => !p.isBot).every((p) => p.isReady);
+                    const canStart = room.players.length >= 2 && allHumansReady;
+                    const disabledReason =
+                      room.players.length < 2
+                        ? 'Mínimo de 2 jogadores para iniciar'
+                        : !allHumansReady
+                        ? 'Aguarde todos os participantes ficarem prontos'
+                        : '';
+
+                    return (
+                      <button
+                        onClick={onStartGame}
+                        disabled={!canStart}
+                        title={disabledReason || 'Iniciar Partida'}
+                        className={`px-6 py-2 rounded-xl font-black text-xs transition flex items-center gap-2 border ${
+                          canStart
+                            ? 'bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 text-white shadow-glow-pink cursor-pointer active:scale-95'
+                            : 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
+                        }`}
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Iniciar Partida</span>
+                      </button>
+                    );
+                  })()}
                 </>
               )}
 

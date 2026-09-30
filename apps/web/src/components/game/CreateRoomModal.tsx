@@ -169,8 +169,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
         <div className="p-4 border-t border-white/10 bg-slate-950/80 space-y-2.5 flex-shrink-0">
           {/* Editorial One-Line Summary */}
           <div className="text-center text-[11px] font-mono text-slate-400">
-            <span className="text-stone-200 font-bold">{settings.maxPlayers} jogadores</span> ·{' '}
-            <span className="text-stone-200 font-bold">{settings.rounds} rodadas</span> ·{' '}
+            <span className="text-stone-200 font-bold">Até {settings.maxPlayers} jogadores</span> ·{' '}
             <span className="text-stone-200 font-bold">{settings.bettingTimeSeconds}s aposta</span> ·{' '}
             <span className="text-stone-200 font-bold">trecho {settings.clipDurationSeconds}s</span> ·{' '}
             <span className="text-stone-200 font-bold">{settings.startingChips.toLocaleString('pt-BR')} fichas</span>
