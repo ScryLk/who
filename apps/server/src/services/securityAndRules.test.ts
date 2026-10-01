@@ -282,4 +282,31 @@ describe('Security, Rules, Authorization and Zero-Leak Integration Tests', () =>
     assert.equal(roomStore.getRoom(room.code), undefined);
     assert.equal(roomStore.getReconnectToken(room.code, 'h1'), undefined);
   });
+
+  it('Join Room Error Codes: returns ROOM_NOT_FOUND, ROOM_FULL, and GAME_ALREADY_STARTED', () => {
+    // 1. ROOM_NOT_FOUND
+    const notFoundRes = roomStore.joinRoom('ZZZZ', 'p-unknown', 'Ghost', 'party-1');
+    assert.equal(notFoundRes.errorCode, 'ROOM_NOT_FOUND');
+    assert.ok(notFoundRes.error);
+
+    // 2. ROOM_FULL
+    const room = roomStore.createRoom('h-full', 'Alice', 'party-1', { maxPlayers: 2 });
+    const p2Res = roomStore.joinRoom(room.code, 'p2-full', 'Bob', 'party-2');
+    assert.ok(p2Res.room);
+    assert.equal(p2Res.errorCode, undefined);
+
+    // Third player should get ROOM_FULL
+    const p3Res = roomStore.joinRoom(room.code, 'p3-overflow', 'Charlie', 'party-3');
+    assert.equal(p3Res.errorCode, 'ROOM_FULL');
+    assert.ok(p3Res.error);
+
+    // 3. GAME_ALREADY_STARTED
+    roomStore.setPlayerReady(room.code, 'p2-full', true);
+    roomStore.startTurnSequence(room.code);
+    assert.notEqual(room.phase, 'LOBBY');
+
+    const lateJoinRes = roomStore.joinRoom(room.code, 'p4-late', 'Dave', 'party-4');
+    assert.equal(lateJoinRes.errorCode, 'GAME_ALREADY_STARTED');
+    assert.ok(lateJoinRes.error);
+  });
 });

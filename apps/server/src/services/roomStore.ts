@@ -209,17 +209,17 @@ class RoomStore {
     return Array.from(this.rooms.values());
   }
 
-  joinRoom(code: string, playerId: string, nickname: string, avatar: string): { room?: RoomState; reconnectToken?: string; error?: string } {
+  joinRoom(code: string, playerId: string, nickname: string, avatar: string): { room?: RoomState; reconnectToken?: string; error?: string; errorCode?: string } {
     const room = this.getRoom(code);
     if (!room) {
-      return { error: 'Sala não encontrada!' };
+      return { error: 'Sala não encontrada!', errorCode: 'ROOM_NOT_FOUND' };
     }
     if (room.phase !== 'LOBBY') {
-      return { error: 'A partida já começou nesta sala!' };
+      return { error: 'A partida já começou nesta sala!', errorCode: 'GAME_ALREADY_STARTED' };
     }
     const max = room.settings?.maxPlayers || 12;
     if (room.players.length >= max) {
-      return { error: `A sala está cheia (máximo ${max} jogadores)!` };
+      return { error: `A sala está cheia (máximo ${max} jogadores)!`, errorCode: 'ROOM_FULL' };
     }
 
     const existing = room.players.find((p) => p.id === playerId);

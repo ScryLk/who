@@ -1,6 +1,8 @@
 import { Server, Socket } from 'socket.io';
 import {
+  createRoomSchema,
   guesserBetSchema,
+  joinRoomSchema,
   ownerBetSchema,
   reconnectSessionSchema,
   roomSettingsSchema,
@@ -318,21 +320,34 @@ export function setupSocketHandlers(io: Server) {
     socket.on('join_room', (data: { roomCode: string; nickname: string; avatar: string }, callback) => {
       if (typeof callback !== 'function') return;
       try {
-        const code = (data?.roomCode || '').trim().toUpperCase();
-        const nick = (data?.nickname || '').trim().slice(0, 30);
-        if (!code || !nick) {
-          return callback({ success: false, error: 'Código da sala e apelido são obrigatórios.' });
+        const parsed = joinRoomSchema.safeParse(data);
+        if (!parsed.success) {
+          return callback({
+            success: false,
+            error: 'Código da sala ou apelido inválido.',
+            code: 'INVALID_ROOM_CODE',
+          });
         }
-        const result = roomStore.joinRoom(code, socket.id, nick, data.avatar);
+        const { roomCode: code, nickname: nick, avatar } = parsed.data;
+        const result = roomStore.joinRoom(code, socket.id, nick, avatar);
         if (result.error || !result.room) {
-          return callback({ success: false, error: result.error });
+          return callback({
+            success: false,
+            error: result.error,
+            code: result.errorCode || 'JOIN_FAILED',
+          });
         }
         socket.join(result.room.code);
         const sanitized = roomStore.getSanitizedRoomState(result.room.code, socket.id) || result.room;
-        callback({ success: true, room: sanitized, playerId: socket.id, reconnectToken: result.reconnectToken });
+        callback({
+          success: true,
+          room: sanitized,
+          playerId: socket.id,
+          reconnectToken: result.reconnectToken,
+        });
         broadcastRoomState(result.room);
       } catch (err: any) {
-        callback({ success: false, error: err.message });
+        callback({ success: false, error: err.message, code: 'JOIN_ERROR' });
       }
     });
 

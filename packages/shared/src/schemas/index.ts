@@ -25,8 +25,17 @@ export const createRoomSchema = z.object({
   settings: roomSettingsSchema.partial().optional(),
 });
 
+import { normalizeRoomCode, isValidRoomCode } from '../room/inviteUtils';
+
+export const roomCodeSchema = z
+  .string()
+  .transform((val) => normalizeRoomCode(val))
+  .refine((val) => isValidRoomCode(val), {
+    message: 'Código da sala inválido. Deve conter exatamente 4 caracteres alfanuméricos.',
+  });
+
 export const joinRoomSchema = z.object({
-  roomCode: z.string().trim().min(2).max(10),
+  roomCode: roomCodeSchema,
   nickname: z.string().trim().min(1).max(24),
   avatar: z.string().trim().min(1),
 });

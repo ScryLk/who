@@ -44,6 +44,7 @@ import {
   Minus,
   RotateCcw,
   LogOut,
+  Share2,
 } from 'lucide-react';
 import { PlayerAvatar } from '@/components/common/PlayerAvatar';
 import { BackgroundMusic } from '@/components/common/BackgroundMusic';
@@ -58,6 +59,7 @@ import { BetRevealStepper } from '@/components/game/BetRevealStepper';
 import { OwnerRevealSequence } from '@/components/game/OwnerRevealSequence';
 import { OwnerPredictionReveal } from '@/components/game/OwnerPredictionReveal';
 import { SettlementReveal } from '@/components/game/SettlementReveal';
+import { RoomInviteModal } from '@/components/game/RoomInviteModal';
 import { RoundSummaryCard } from '@/components/game/RoundSummaryCard';
 import { getSocket } from '@/lib/socket';
 import { useSoundEffects } from '@/lib/useSoundEffects';
@@ -127,6 +129,9 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
     playOwnerRevealSound,
     playBlockedSound,
   } = useSoundEffects();
+
+  // Invite Modal State (LOBBY only)
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
   // Chat Drawer & Unread Counter
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -626,17 +631,19 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
             <Disc3 className="w-6 h-6 text-yellow-400 animate-spin-slow" />
           </div>
 
-          <div className="glass-card px-3 py-1 rounded-xl flex items-center gap-2 border border-white/20 text-xs shadow-md">
+          <div className="glass-card px-3 py-1.5 rounded-xl flex items-center gap-2 border border-white/20 text-xs shadow-md">
             <span className="font-semibold text-blue-200">Sala:</span>
             <span className="font-mono font-black text-yellow-300">#{room.code}</span>
-            <button
-              onClick={handleCopyLink}
-              className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
-              title="Copiar link da sala"
-            >
-              <LinkIcon className="w-3.5 h-3.5" />
-            </button>
-            {copied && <span className="text-[10px] text-emerald-400 font-bold">Copiado!</span>}
+            {room.phase === 'LOBBY' && (
+              <button
+                onClick={() => setIsInviteModalOpen(true)}
+                className="ml-1 px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 font-bold transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                title="Convidar jogadores para a sala"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Convidar</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -2136,6 +2143,17 @@ export const RoomLobby: React.FC<RoomLobbyProps> = ({
               </form>
             </div>
           </div>
+        )}
+
+        {/* Room Invite Modal (LOBBY only) */}
+        {room.phase === 'LOBBY' && (
+          <RoomInviteModal
+            isOpen={isInviteModalOpen}
+            onClose={() => setIsInviteModalOpen(false)}
+            roomCode={room.code}
+            playerCount={room.players.length}
+            maxPlayers={maxPlayers}
+          />
         )}
       </div>
     </div>
