@@ -91,6 +91,18 @@ export class RedisRoomStore {
       } catch (e) {}
     }
   }
+
+  async disconnect(): Promise<void> {
+    if (this.redisClient) {
+      try {
+        await this.redisClient.quit();
+        this.isRedisAvailable = false;
+        console.log('[REDIS] Disconnected from Redis Store.');
+      } catch (err: any) {
+        console.warn(`[REDIS] Error disconnecting Redis client (${err?.message || err}).`);
+      }
+    }
+  }
 }
 
 export const redisRoomStore = new RedisRoomStore();

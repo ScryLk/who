@@ -128,3 +128,58 @@ docker compose up -d --build
 ```
 
 Access the web client at `http://localhost:3000` and the API healthcheck at `http://localhost:4000/health`.
+
+---
+
+## 7. Production Deployment on Railway
+
+WHO? is designed to run on Railway in a single project architecture consisting of two services:
+1. **WHO App Service**: A multi-stage Docker container running Next.js (port 3000) and Express/Socket.IO (port 4000) concurrently via Turborepo (`pnpm start`).
+2. **Redis Service**: A private Railway Redis database providing persistent room state.
+
+### Step 1: Create a Railway Project
+1. Log into your [Railway dashboard](https://railway.com/).
+2. Click **New Project** and choose **Deploy from GitHub repo**.
+3. Select the `ScryLk/who` repository.
+
+### Step 2: Provision the Redis Database
+1. Inside your new Railway project, click **Create** > **Database** > **Add Redis**.
+2. Railway will create a private Redis instance and expose the reference variable `${{Redis.REDIS_URL}}`.
+
+### Step 3: Configure Build Arguments
+Next.js inlines `NEXT_PUBLIC_*` environment variables during build time (`pnpm build`).
+In your WHO App service settings:
+1. Go to **Settings** > **Build**.
+2. Under **Build Arguments**, add:
+   - `NEXT_PUBLIC_SERVER_URL`: `https://<your-backend-domain>.up.railway.app`
+
+### Step 4: Configure Runtime Environment Variables
+In your WHO App service settings, navigate to **Variables** and configure:
+
+| Variable | Recommended Value | Purpose |
+|---|---|---|
+| `NODE_ENV` | `production` | Enables production optimizations and security enforcement |
+| `PORT` | `4000` | Port for Express & Socket.IO server |
+| `CLIENT_ORIGIN` | `https://<your-frontend-domain>.up.railway.app` | Whitelists frontend origin for CORS and WebSockets |
+| `REDIS_URL` | `${{Redis.REDIS_URL}}` | Connects server to the private Railway Redis service |
+| `YOUTUBE_API_KEY` | `<your-google-api-key>` | Server secret for YouTube Data API v3 catalog searches |
+
+### Step 5: Configure Port Routing and Public Domains
+Railway allows exposing multiple ports from a single container via custom service domains:
+1. Go to **Settings** > **Networking**.
+2. **Frontend Domain (Port 3000)**:
+   - Generate or attach a domain (e.g. `who-game.up.railway.app`).
+   - Set the port to `3000` (Next.js web app).
+3. **Backend Domain (Port 4000)**:
+   - Generate or attach a secondary domain (e.g. `who-api.up.railway.app`).
+   - Set the port to `4000` (Express / Socket.IO server).
+
+### Step 6: Verify Deployment Health
+1. Test backend healthcheck:
+   ```bash
+   curl -s https://who-api.up.railway.app/health
+   # Expected response: {"status":"ok","game":"WHO","timestamp":"..."}
+   ```
+2. Open the frontend domain in your browser (`https://who-game.up.railway.app`).
+3. Create a room and verify that the lobby connects to the WebSocket backend without CORS or connection errors in the browser console.
+
