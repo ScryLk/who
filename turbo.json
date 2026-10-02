@@ -1,5 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "PORT",
+    "NODE_ENV",
+    "CLIENT_ORIGIN",
+    "REDIS_URL",
+    "YOUTUBE_API_KEY",
+    "NEXT_PUBLIC_SERVER_URL"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -22,7 +30,15 @@
     },
     "start": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": [
+        "PORT",
+        "NODE_ENV",
+        "CLIENT_ORIGIN",
+        "REDIS_URL",
+        "YOUTUBE_API_KEY",
+        "NEXT_PUBLIC_SERVER_URL"
+      ]
     }
   }
 }

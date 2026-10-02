@@ -1,7 +1,18 @@
-try {
-  process.loadEnvFile?.();
-} catch (e) {
-  // Ignore missing .env file
+import path from 'path';
+import fs from 'fs';
+
+const potentialEnvPaths = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '../../.env'),
+  '/app/.env',
+];
+
+for (const envPath of potentialEnvPaths) {
+  try {
+    if (fs.existsSync(envPath)) {
+      process.loadEnvFile?.(envPath);
+    }
+  } catch (_) {}
 }
 
 import express from 'express';
